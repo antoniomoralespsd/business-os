@@ -15,7 +15,7 @@ Abre http://localhost:3000. Los datos viven en memoria/localStorage del navegado
 
 1. **Crear el proyecto** en https://console.firebase.google.com con la cuenta `antoniomorales.psd@gmail.com` → "Agregar proyecto" → nombre `business-os`. Google Analytics: no hace falta.
 2. **Plan Blaze**: Configuración → Uso y facturación → Blaze, con presupuesto y alerta de 10 €. Con tu volumen el coste real es ~0 €.
-3. **Firestore**: Compilación → Firestore Database → Crear → modo producción → región `europe-west1`.
+3. **Firestore**: Compilación → Firestore Database → Crear → modo producción → región `europe-southwest1` (Madrid; no se puede cambiar después).
 4. **Authentication**: Compilación → Authentication → Comenzar → proveedor **Google** → activar.
 5. **App web**: Configuración del proyecto → Tus apps → `</>` → registra "Business OS web" y copia los valores a `apps/web/.env.local` (plantilla en `apps/web/.env.example`).
 6. **Cuenta de servicio (solo para desarrollo local)**: Configuración del proyecto → Cuentas de servicio → Generar nueva clave privada → guárdala fuera del repo y apunta `GOOGLE_APPLICATION_CREDENTIALS` a ella.
