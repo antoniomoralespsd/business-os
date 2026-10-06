@@ -1,0 +1,24 @@
+# Firebase App Hosting runtime config. Public values here; secrets via Secret Manager references.
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+  memoryMiB: 512
+env:
+  - variable: NEXT_PUBLIC_DATA_MODE
+    value: firestore
+  - variable: NEXT_PUBLIC_WORKSPACE_ID
+    value: main
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: REPLACE_ME
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: REPLACE_ME
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: REPLACE_ME
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: REPLACE_ME
+  - variable: ALLOWED_EMAILS
+    value: antoniomorales.psd@gmail.com,tonimc99@gmail.com
+    availability: [RUNTIME]
+  # Ejemplo de secreto (Fase 3+):
+  # - variable: ANTHROPIC_API_KEY
+  #   secret: anthropic-api-key

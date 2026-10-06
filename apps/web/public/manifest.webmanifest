@@ -1,0 +1,9 @@
+{
+  "name": "Business OS",
+  "short_name": "Business OS",
+  "start_url": "/tasks",
+  "display": "standalone",
+  "background_color": "#f4f3f1",
+  "theme_color": "#0a0a0a",
+  "icons": []
+}

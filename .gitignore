@@ -1,0 +1,9 @@
+node_modules
+.next
+out
+.env*.local
+.env
+*.log
+.turbo
+coverage
+service-account*.json

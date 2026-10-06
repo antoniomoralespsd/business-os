@@ -1,0 +1,15 @@
+{
+  "indexes": [
+    { "collectionGroup": "tasks", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "archived", "order": "ASCENDING" }, { "fieldPath": "dueDate", "order": "ASCENDING" } ] },
+    { "collectionGroup": "tasks", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "dueDate", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" } ] },
+    { "collectionGroup": "tasks", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "clientId", "order": "ASCENDING" }, { "fieldPath": "dueDate", "order": "ASCENDING" } ] },
+    { "collectionGroup": "tasks", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "archived", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "reviewStartedAt", "order": "ASCENDING" } ] },
+    { "collectionGroup": "activity_logs", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "entity.kind", "order": "ASCENDING" }, { "fieldPath": "entity.id", "order": "ASCENDING" }, { "fieldPath": "at", "order": "DESCENDING" } ] }
+  ],
+  "fieldOverrides": []
+}
