@@ -11,7 +11,7 @@ const config: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ['@bos/domain', '@bos/schemas'],
   ...(demo
-    ? { output: 'export', pageExtensions: ['tsx', 'ts'], images: { unoptimized: true }, assetPrefix: '.' }
+    ? { output: 'export', pageExtensions: ['tsx', 'ts'], images: { unoptimized: true }, assetPrefix: './a' }
     : { pageExtensions: ['tsx', 'ts', 'server.ts'] }),
 };
 
