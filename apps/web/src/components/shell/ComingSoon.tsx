@@ -9,7 +9,7 @@ export function ComingSoon({ href, children }: { href: string; children?: React.
       <h1 className="font-display text-[44px] leading-[0.95] md:text-[56px]">{item?.label}</h1>
       <div className="mt-10 flex max-w-xl items-stretch overflow-hidden rounded-[10px] border border-line bg-surface shadow-[var(--shadow-card)]">
         <div className="flex-1 p-5">
-          <p className="eyebrow text-ink-2">{item?.phase ?? 'Próximamente'}</p>
+          <p className="eyebrow text-ink-2">Próximamente</p>
           <div className="mt-2 text-[14px] leading-relaxed text-ink-2">{children ?? 'Este módulo todavía no está construido. Llegará en su fase del roadmap.'}</div>
         </div>
         <span className="iris-bar w-[4px]" aria-hidden />
