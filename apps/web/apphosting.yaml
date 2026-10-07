@@ -9,13 +9,13 @@ env:
   - variable: NEXT_PUBLIC_WORKSPACE_ID
     value: main
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
-    value: REPLACE_ME
+    value: "AIzaSyCBywjk7NUDsu9qAdQL-zmMT381Ry00PG4"
   - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
-    value: REPLACE_ME
+    value: "bussiness-os.firebaseapp.com"
   - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
-    value: REPLACE_ME
+    value: "bussiness-os"
   - variable: NEXT_PUBLIC_FIREBASE_APP_ID
-    value: REPLACE_ME
+    value: "1:896402857658:web:0a800a107dbac988ebec83"
   - variable: ALLOWED_EMAILS
     value: antoniomorales.psd@gmail.com,tonimc99@gmail.com
     availability: [RUNTIME]
