@@ -1,9 +1,18 @@
 'use client';
+import { DATA_MODE } from './config';
 
 export class ActionFailed extends Error {}
 
-/** Calls a registered server action. Throws ActionFailed with a Spanish message on failure. */
+/** Calls a registered action. Throws ActionFailed with a Spanish message on failure. */
 export async function callAction<T = unknown>(action: string, input: unknown): Promise<T> {
+  if (DATA_MODE === 'memory') {
+    const { callDemoAction } = await import('@/data/runtime');
+    try {
+      return await callDemoAction<T>(action, input);
+    } catch (e) {
+      throw new ActionFailed(e instanceof Error ? e.message : 'Error');
+    }
+  }
   let res: Response;
   try {
     res = await fetch('/api/actions', {

@@ -16,8 +16,14 @@ function app(): App {
   return initializeApp(usingEmulators ? { projectId } : { credential: applicationDefault(), projectId });
 }
 
+let configured = false;
 export const adminDb = () => {
   const db = getFirestore(app());
+  if (!configured) {
+    configured = true;
+    // Safety net: drop undefined fields instead of failing the write.
+    db.settings({ ignoreUndefinedProperties: true });
+  }
   return db;
 };
 export const adminAuth = () => getAuth(app());

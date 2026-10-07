@@ -1,6 +1,8 @@
 @import 'tailwindcss';
 @import '@fontsource-variable/figtree';
 
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
 @font-face {
   font-family: 'Rogie';
   src: url('../../public/fonts/Rogie.ttf') format('truetype');
@@ -8,12 +10,14 @@
 }
 
 /* ---------- Iris OS design tokens ---------- */
+/* Light: paper white, black ink, iridescent accents. */
 :root {
   --bg: #f4f3f1;
   --surface: #ffffff;
   --surface-2: #fafaf9;
   --surface-3: #efeeeb;
   --ink: #0a0a0a;
+  --on-ink: #ffffff;
   --ink-2: #5c5c5c;
   --ink-3: #9a9a9a;
   --line: #e7e5e2;
@@ -25,10 +29,38 @@
   --danger: #d2483f;
   --changes: #e0457b;
   --info: #5b6cff;
+  --hatch: rgba(10, 10, 10, 0.035);
+  --grain-opacity: 0.035;
+  --grain-invert: 0;
   --shadow-card: 0 1px 2px rgba(10, 10, 10, 0.04), 0 8px 24px -12px rgba(10, 10, 10, 0.08);
   --shadow-pop: 0 12px 40px -8px rgba(10, 10, 10, 0.18);
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   color-scheme: light;
+}
+
+/* Dark: the same editorial system inverted — near-black paper, bone ink, same iridescence. */
+:root[data-theme='dark'] {
+  --bg: #0d0d0e;
+  --surface: #151517;
+  --surface-2: #1a1a1d;
+  --surface-3: #222226;
+  --ink: #f2f0ec;
+  --on-ink: #0d0d0e;
+  --ink-2: #a9a6a1;
+  --ink-3: #6e6c69;
+  --line: #29292d;
+  --line-strong: #3a3a40;
+  --ok: #4cc28c;
+  --warn: #e0a940;
+  --danger: #f06a60;
+  --changes: #ff6b9d;
+  --info: #8a96ff;
+  --hatch: rgba(255, 255, 255, 0.04);
+  --grain-opacity: 0.06;
+  --grain-invert: 1;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 16px 48px -8px rgba(0, 0, 0, 0.7);
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -37,6 +69,7 @@
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
   --color-ink: var(--ink);
+  --color-on-ink: var(--on-ink);
   --color-ink-2: var(--ink-2);
   --color-ink-3: var(--ink-3);
   --color-line: var(--line);
@@ -62,6 +95,7 @@ body {
   font-family: var(--font-sans);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 200ms var(--ease), color 200ms var(--ease);
 }
 
 /* Paper grain on the canvas only (never on cards). */
@@ -71,7 +105,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.035;
+  opacity: var(--grain-opacity);
+  filter: invert(var(--grain-invert));
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
@@ -98,16 +133,26 @@ body::before {
 .iris-bar-x {
   background: var(--iris-gradient-x);
 }
+.iris-text {
+  background: var(--iris-gradient-x);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 
 /* Primary button with the iridescent tab on its right edge. */
 .btn-primary {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   background: var(--ink);
-  color: #fff;
+  color: var(--on-ink);
   border-radius: var(--radius-sm);
   overflow: hidden;
   padding-right: 18px;
-  transition: padding-right 160ms var(--ease);
+  font-weight: 600;
+  transition: padding-right 160ms var(--ease), opacity 160ms;
 }
 .btn-primary::after {
   content: '';
@@ -122,10 +167,21 @@ body::before {
 .btn-primary:hover::after {
   width: 8px;
 }
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
-/* Hatched surface for tasks waiting on someone else. */
+/* Hatched surface for things waiting on someone else. */
 .hatch {
-  background-image: repeating-linear-gradient(135deg, transparent 0 6px, rgba(10, 10, 10, 0.035) 6px 7px);
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, var(--hatch) 6px 7px);
+}
+
+/* Zebra motif from the Iris identity, used only on empty states and the login screen. */
+.zebra {
+  background-color: var(--ink);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cpath d='M-20 30 C 30 10, 60 60, 110 35 S 190 20, 230 45 L230 60 C 190 40, 150 70, 110 55 S 30 30, -20 50Z M-20 85 C 40 60, 70 115, 120 90 S 190 70, 230 100 L230 118 C 190 92, 150 128, 112 110 S 40 85, -20 105Z M-20 145 C 30 120, 80 170, 125 145 S 195 130, 230 155 L230 172 C 195 150, 150 185, 118 165 S 35 145, -20 165Z' fill='black'/%3E%3C/svg%3E") center / 160px repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cpath d='M-20 30 C 30 10, 60 60, 110 35 S 190 20, 230 45 L230 60 C 190 40, 150 70, 110 55 S 30 30, -20 50Z M-20 85 C 40 60, 70 115, 120 90 S 190 70, 230 100 L230 118 C 190 92, 150 128, 112 110 S 40 85, -20 105Z M-20 145 C 30 120, 80 170, 125 145 S 195 130, 230 155 L230 172 C 195 150, 150 185, 118 165 S 35 145, -20 165Z' fill='black'/%3E%3C/svg%3E") center / 160px repeat;
 }
 
 .scroll-thin {
@@ -138,6 +194,16 @@ body::before {
   outline-offset: 2px;
 }
 
+input[type='date']::-webkit-calendar-picker-indicator {
+  filter: invert(var(--grain-invert));
+}
+
+@media print {
+  body::before {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -148,6 +214,12 @@ body::before {
 }
 
 @keyframes slideIn {
-  from { transform: translateX(24px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }

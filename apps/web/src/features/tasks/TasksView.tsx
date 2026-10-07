@@ -46,6 +46,7 @@ import { DayHeader, DroppableList } from './components/DayColumn';
 import { QuickAdd } from './components/QuickAdd';
 import { TaskCard, TaskCardBody } from './components/TaskCard';
 import { TaskDrawer } from './components/TaskDrawer';
+import { ReviewStrip } from './components/ReviewStrip';
 import type { TaskMenuHandlers } from './components/TaskMenu';
 import { useTasksBoard } from './useTasksBoard';
 
@@ -321,6 +322,8 @@ function TasksBoardView() {
         </div>
       </div>
 
+      <ReviewStrip />
+
       {board.error && (
         <p className="mx-4 mt-3 rounded-[8px] border border-danger/30 bg-danger/5 px-3 py-2 text-[12.5px] text-danger md:mx-8">
           No se pudieron cargar las tareas: {board.error}
@@ -461,7 +464,7 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
   return (
     <button type="button" role="switch" aria-checked={on} onClick={() => onChange(!on)} className="inline-flex items-center gap-1.5 rounded-[4px] px-2 py-1.5 text-[12px] text-ink-2 hover:bg-surface">
       <span className={clsx('relative h-[14px] w-[24px] rounded-full transition-colors', on ? 'bg-ink' : 'bg-line-strong')}>
-        <span className={clsx('absolute top-[2px] h-[10px] w-[10px] rounded-full bg-white transition-[left] duration-150', on ? 'left-[12px]' : 'left-[2px]')} />
+        <span className={clsx('absolute top-[2px] h-[10px] w-[10px] rounded-full bg-surface transition-[left] duration-150', on ? 'left-[12px]' : 'left-[2px]')} />
       </span>
       {label}
     </button>
@@ -500,11 +503,11 @@ function MobileDay(props: {
             key={d}
             type="button"
             onClick={() => props.onPick(d)}
-            className={clsx('flex flex-col items-center rounded-[8px] py-1.5', d === props.day ? 'bg-ink text-white' : 'text-ink-2', d === props.today && d !== props.day && 'ring-1 ring-ink/30')}
+            className={clsx('flex flex-col items-center rounded-[8px] py-1.5', d === props.day ? 'bg-ink text-on-ink' : 'text-ink-2', d === props.today && d !== props.day && 'ring-1 ring-ink/30')}
           >
             <span className="text-[9.5px] font-semibold tracking-[0.12em]">{WEEKDAY_SHORT[weekdayIndex(d)]}</span>
             <span className="font-display text-[20px] leading-none">{dayOfMonth(d)}</span>
-            <span className={clsx('mt-0.5 h-1 w-1 rounded-full', props.counts(d) > 0 ? (d === props.day ? 'bg-white' : 'bg-ink-3') : 'bg-transparent')} />
+            <span className={clsx('mt-0.5 h-1 w-1 rounded-full', props.counts(d) > 0 ? (d === props.day ? 'bg-on-ink' : 'bg-ink-3') : 'bg-transparent')} />
           </button>
         ))}
       </div>

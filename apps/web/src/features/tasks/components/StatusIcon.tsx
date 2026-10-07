@@ -23,7 +23,7 @@ export function StatusIcon({ status, size = 14 }: { status: TaskStatus; size?: n
       return <Clock3 style={s} className="text-ink-2" strokeWidth={2} />;
     case 'completed':
       return (
-        <span style={s} className="grid place-items-center rounded-full bg-ink text-white">
+        <span style={s} className="grid place-items-center rounded-full bg-ink text-on-ink">
           <Check width={size - 5} height={size - 5} strokeWidth={3} />
         </span>
       );

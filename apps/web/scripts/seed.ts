@@ -5,7 +5,7 @@
  */
 import { applicationDefault, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
-import { DEMO_CLIENTS } from '../src/features/tasks/gateway/memory';
+import { DEMO_CLIENTS } from '../src/data/demoSeed';
 
 const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
 const ws = process.env.NEXT_PUBLIC_WORKSPACE_ID || 'main';

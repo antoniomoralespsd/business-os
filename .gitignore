@@ -8,4 +8,4 @@ out
 coverage
 service-account*.json
 
-/.apphosting/
+/.apphosting/*.tsbuildinfo

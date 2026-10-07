@@ -8,6 +8,7 @@ import { TASK_STATUSES } from '@bos/schemas';
 import { addDays, daysBetween, formatLongDay, STATUS_LABEL, todayISO } from '@bos/domain';
 import { clientColor } from '@/lib/clientColors';
 import { StatusIcon } from './StatusIcon';
+import { JobLink } from './JobLink';
 
 const PRIORITIES: { value: TaskPriority; label: string }[] = [
   { value: 'low', label: 'Baja' },
@@ -136,6 +137,8 @@ export function TaskDrawer({ task, clients, onClose, onUpdate, onStatus, onMove,
                   )}
                 </div>
 
+                {task.clientId && !task.id.startsWith('tmp-') && <JobLink task={task} client={clients.find((c) => c.id === task.clientId)} />}
+
                 <div className="mt-5 divide-y divide-line border-y border-line">
                   <Field label="Estado">
                     <div className="flex flex-wrap gap-1">
@@ -146,7 +149,7 @@ export function TaskDrawer({ task, clients, onClose, onUpdate, onStatus, onMove,
                           onClick={() => onStatus(task.id, s)}
                           className={clsx(
                             'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]',
-                            task.status === s ? 'border-ink bg-ink text-white' : 'border-line text-ink-2 hover:border-line-strong hover:text-ink',
+                            task.status === s ? 'border-ink bg-ink text-on-ink' : 'border-line text-ink-2 hover:border-line-strong hover:text-ink',
                           )}
                         >
                           {STATUS_LABEL[s]}
@@ -204,7 +207,7 @@ export function TaskDrawer({ task, clients, onClose, onUpdate, onStatus, onMove,
                           key={p.value}
                           type="button"
                           onClick={() => onUpdate(task.id, { priority: p.value })}
-                          className={clsx('rounded-[4px] px-3 py-1 text-[12px]', task.priority === p.value ? 'bg-ink text-white' : 'text-ink-2 hover:text-ink')}
+                          className={clsx('rounded-[4px] px-3 py-1 text-[12px]', task.priority === p.value ? 'bg-ink text-on-ink' : 'text-ink-2 hover:text-ink')}
                         >
                           {p.label}
                         </button>

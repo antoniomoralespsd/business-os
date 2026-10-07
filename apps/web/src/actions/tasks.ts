@@ -1,20 +1,10 @@
-import 'server-only';
-import { FieldValue, Timestamp, type DocumentReference } from 'firebase-admin/firestore';
-import {
-  CreateTaskInput,
-  MoveTaskInput,
-  SetTaskStatusInput,
-  TaskIdInput,
-  UpdateTaskInput,
-  type Task,
-} from '@bos/schemas';
-import { STATUS_LABEL, statusChangeSummary, statusTransitionPatch, formatLongDay } from '@bos/domain';
+import { CreateTaskInput, MoveTaskInput, SetTaskStatusInput, TaskIdInput, UpdateTaskInput, type Task } from '@bos/schemas';
+import { formatLongDay, statusChangeSummary, statusTransitionPatch, STATUS_LABEL } from '@bos/domain';
 import { taskFromDoc } from '@/lib/convert';
-import { defineAction, type ActionContext } from './registry';
+import type { DocRefLike, TxLike } from '@/data/db';
+import { ActionError, baseFields, defineAction, type ActionContext } from './define';
 
-class ActionError extends Error {}
-
-async function loadTask(ctx: ActionContext, tx: FirebaseFirestore.Transaction, id: string): Promise<{ ref: DocumentReference; task: Task }> {
+async function loadTask(ctx: ActionContext, tx: TxLike, id: string): Promise<{ ref: DocRefLike; task: Task }> {
   const ref = ctx.col('tasks').doc(id);
   const snap = await tx.get(ref);
   const task = snap.exists ? taskFromDoc(snap.id, snap.data() ?? {}) : null;
@@ -22,7 +12,7 @@ async function loadTask(ctx: ActionContext, tx: FirebaseFirestore.Transaction, i
   return { ref, task };
 }
 
-const ts = (iso: string | null) => (iso ? Timestamp.fromDate(new Date(iso)) : null);
+const toDate = (iso: string | null) => (iso ? new Date(iso) : null);
 const dayLabel = (d: string | null) => (d ? formatLongDay(d) : 'Sin fecha');
 
 export const createTask = defineAction({
@@ -33,11 +23,9 @@ export const createTask = defineAction({
   handler: async (ctx, input) => {
     const ref = ctx.col('tasks').doc();
     await ctx.db.runTransaction(async (tx) => {
-      const now = ctx.now.toISOString();
-      const effects = statusTransitionPatch({ status: 'pending', completedAt: null, reviewStartedAt: null }, input.status, now);
+      const p = statusTransitionPatch({ status: 'pending', completedAt: null, reviewStartedAt: null }, input.status, ctx.now.toISOString());
       tx.set(ref, {
-        id: ref.id,
-        workspaceId: ctx.workspaceId,
+        ...baseFields(ctx, ref.id),
         title: input.title,
         clientId: input.clientId,
         description: input.description,
@@ -46,12 +34,9 @@ export const createTask = defineAction({
         priority: input.priority,
         order: input.order,
         archived: false,
-        completedAt: ts(effects.completedAt),
-        reviewStartedAt: ts(effects.reviewStartedAt),
+        completedAt: toDate(p.completedAt),
+        reviewStartedAt: toDate(p.reviewStartedAt),
         jobId: null,
-        createdBy: ctx.actor.id,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
       });
       ctx.log(tx, { action: 'task.create', entity: { kind: 'task', id: ref.id }, summary: 'Tarea creada', after: { title: input.title, dueDate: input.dueDate } });
     });
@@ -67,9 +52,9 @@ export const updateTask = defineAction({
   handler: async (ctx, { id, patch }) => {
     await ctx.db.runTransaction(async (tx) => {
       const { ref, task } = await loadTask(ctx, tx, id);
-      const changed = Object.entries(patch).filter(([k, v]) => task[k as keyof Task] !== v);
+      const changed = Object.entries(patch).filter(([k, v]) => v !== undefined && task[k as keyof Task] !== v);
       if (changed.length === 0) return;
-      tx.update(ref, { ...Object.fromEntries(changed), updatedAt: FieldValue.serverTimestamp() });
+      tx.update(ref, { ...Object.fromEntries(changed), updatedAt: ctx.now });
       const labels: Record<string, string> = { title: 'Título', clientId: 'Cliente', description: 'Notas', priority: 'Prioridad' };
       ctx.log(tx, {
         action: 'task.update',
@@ -91,15 +76,9 @@ export const moveTask = defineAction({
   handler: async (ctx, { id, dueDate, order }) => {
     await ctx.db.runTransaction(async (tx) => {
       const { ref, task } = await loadTask(ctx, tx, id);
-      tx.update(ref, { dueDate, order, updatedAt: FieldValue.serverTimestamp() });
+      tx.update(ref, { dueDate, order, updatedAt: ctx.now });
       if (task.dueDate !== dueDate) {
-        ctx.log(tx, {
-          action: 'task.move',
-          entity: { kind: 'task', id },
-          summary: `Fecha: ${dayLabel(task.dueDate)} → ${dayLabel(dueDate)}`,
-          before: { dueDate: task.dueDate, order: task.order },
-          after: { dueDate, order },
-        });
+        ctx.log(tx, { action: 'task.move', entity: { kind: 'task', id }, summary: `Fecha: ${dayLabel(task.dueDate)} → ${dayLabel(dueDate)}`, before: { dueDate: task.dueDate }, after: { dueDate } });
       }
     });
     return { id };
@@ -116,19 +95,8 @@ export const setTaskStatus = defineAction({
       const { ref, task } = await loadTask(ctx, tx, id);
       if (task.status === status) return;
       const p = statusTransitionPatch(task, status, ctx.now.toISOString());
-      tx.update(ref, {
-        status: p.status,
-        completedAt: ts(p.completedAt),
-        reviewStartedAt: ts(p.reviewStartedAt),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      ctx.log(tx, {
-        action: 'task.status',
-        entity: { kind: 'task', id },
-        summary: statusChangeSummary(task.status, status),
-        before: { status: task.status },
-        after: { status },
-      });
+      tx.update(ref, { status: p.status, completedAt: toDate(p.completedAt), reviewStartedAt: toDate(p.reviewStartedAt), updatedAt: ctx.now });
+      ctx.log(tx, { action: 'task.status', entity: { kind: 'task', id }, summary: statusChangeSummary(task.status, status), before: { status: task.status }, after: { status } });
     });
     return { id };
   },
@@ -136,13 +104,13 @@ export const setTaskStatus = defineAction({
 
 export const archiveTask = defineAction({
   name: 'task.archive',
-  description: 'Oculta una tarea de las vistas habituales sin borrarla.',
+  description: 'Oculta una tarea de las vistas habituales sin borrarla (va al Archivo).',
   input: TaskIdInput,
   critical: false,
   handler: async (ctx, { id }) => {
     await ctx.db.runTransaction(async (tx) => {
       const { ref } = await loadTask(ctx, tx, id);
-      tx.update(ref, { archived: true, updatedAt: FieldValue.serverTimestamp() });
+      tx.update(ref, { archived: true, updatedAt: ctx.now });
       ctx.log(tx, { action: 'task.archive', entity: { kind: 'task', id }, summary: 'Tarea archivada' });
     });
     return { id };
@@ -157,8 +125,8 @@ export const unarchiveTask = defineAction({
   handler: async (ctx, { id }) => {
     await ctx.db.runTransaction(async (tx) => {
       const { ref } = await loadTask(ctx, tx, id);
-      tx.update(ref, { archived: false, updatedAt: FieldValue.serverTimestamp() });
-      ctx.log(tx, { action: 'task.unarchive', entity: { kind: 'task', id }, summary: 'Tarea recuperada' });
+      tx.update(ref, { archived: false, updatedAt: ctx.now });
+      ctx.log(tx, { action: 'task.unarchive', entity: { kind: 'task', id }, summary: 'Tarea recuperada del archivo' });
     });
     return { id };
   },
