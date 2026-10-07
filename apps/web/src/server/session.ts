@@ -2,6 +2,7 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { FieldValue } from 'firebase-admin/firestore';
 import { SESSION_COOKIE, WORKSPACE_ID } from '@/lib/config';
+import { DEFAULT_CLIENTS } from './defaultClients';
 import { adminAuth, adminDb } from './firebaseAdmin';
 
 const SESSION_DAYS = 14;
@@ -44,6 +45,13 @@ export async function createSession(idToken: string): Promise<SessionUser> {
     const [wsSnap, memberSnap] = await Promise.all([tx.get(ws), tx.get(member)]);
     if (!wsSnap.exists) {
       tx.set(ws, { name: 'Iris Design', ownerUid: decoded.uid, timezone: 'Europe/Madrid', currency: 'EUR', createdAt: FieldValue.serverTimestamp() });
+      // First login: start with the usual clients so Tasks is useful from minute one.
+      for (const c of DEFAULT_CLIENTS) {
+        tx.set(ws.collection('clients').doc(c.id), {
+          ...c, workspaceId: WORKSPACE_ID, status: 'active', createdBy: decoded.uid,
+          createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
     }
     if (!memberSnap.exists) {
       tx.set(member, { email, role: wsSnap.exists ? 'editor' : 'owner', createdAt: FieldValue.serverTimestamp() });

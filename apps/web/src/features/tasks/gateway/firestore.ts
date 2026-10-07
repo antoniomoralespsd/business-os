@@ -17,11 +17,12 @@ export const firestoreTasksGateway: TasksGateway = {
     const emit = () => {
       if (dated && undated) onData([...dated, ...undated]);
     };
+    // Single-field queries only (no composite index needed); archived tasks are filtered here.
     const toTasks = (docs: { id: string; data: () => Record<string, unknown> }[]) =>
-      docs.map((d) => taskFromDoc(d.id, d.data())).filter((t): t is Task => t !== null);
+      docs.map((d) => taskFromDoc(d.id, d.data())).filter((t): t is Task => t !== null && !t.archived);
 
     const unsubA = onSnapshot(
-      query(ws('tasks'), where('archived', '==', false), where('dueDate', '>=', from), where('dueDate', '<=', to)),
+      query(ws('tasks'), where('dueDate', '>=', from), where('dueDate', '<=', to)),
       (snap) => {
         dated = toTasks(snap.docs);
         emit();
@@ -29,7 +30,7 @@ export const firestoreTasksGateway: TasksGateway = {
       onError,
     );
     const unsubB = onSnapshot(
-      query(ws('tasks'), where('archived', '==', false), where('dueDate', '==', null)),
+      query(ws('tasks'), where('dueDate', '==', null)),
       (snap) => {
         undated = toTasks(snap.docs);
         emit();
@@ -72,9 +73,12 @@ export const firestoreTasksGateway: TasksGateway = {
     await callAction('task.delete', { id });
   },
   async history(taskId) {
-    const snap = await getDocs(
-      query(ws('activity_logs'), where('entity.kind', '==', 'task'), where('entity.id', '==', taskId), orderBy('at', 'desc'), limit(50)),
-    );
-    return snap.docs.map((d) => activityFromDoc(d.id, d.data())).filter((x) => x !== null);
+    // Single-field filter; sorted here so no composite index is required.
+    const snap = await getDocs(query(ws('activity_logs'), where('entity.id', '==', taskId), limit(100)));
+    return snap.docs
+      .map((d) => activityFromDoc(d.id, d.data()))
+      .filter((x) => x !== null && x.entity.kind === 'task')
+      .sort((a, b) => b!.at.localeCompare(a!.at))
+      .slice(0, 50) as NonNullable<ReturnType<typeof activityFromDoc>>[];
   },
 };
