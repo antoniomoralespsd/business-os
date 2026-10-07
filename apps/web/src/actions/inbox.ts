@@ -309,4 +309,36 @@ export const undoManyInboxItems = defineAction({
   },
 });
 
-export const inboxActions = [undoManyInboxItems, createInboxItem, confirmInboxItem, discardInboxItem, attachDrive, updateProposals, removeInboxItems, undoInboxItem];
+/**
+ * Clean slate for re-importing: deletes every invoice/expense that came from the Inbox (imported),
+ * and every Inbox item. Invoices issued in the app and expenses added by hand stay. Drive files stay.
+ */
+export const resetImports = defineAction({
+  name: 'inbox.resetImports',
+  description: 'Borra todas las facturas y gastos importados y vacía el Inbox para volver a importar.',
+  input: z.object({ confirm: z.literal('BORRAR') }),
+  critical: true,
+  handler: async (ctx) => {
+    const counts = { invoices: 0, expenses: 0, inbox: 0 };
+    const wipe = async (col: string, keep: (d: Record<string, unknown>) => boolean, key: keyof typeof counts) => {
+      const all = await ctx.db.runTransaction(async (tx) => (await tx.getQuery(ctx.col(col))).docs.map((d) => ({ id: d.id, data: d.data() ?? {} })));
+      const ids = all.filter((d) => !keep(d.data)).map((d) => d.id);
+      for (let k = 0; k < ids.length; k += 200) {
+        const chunk = ids.slice(k, k + 200);
+        await ctx.db.runTransaction(async (tx) => {
+          for (const id of chunk) tx.delete(ctx.col(col).doc(id));
+        });
+      }
+      counts[key] = ids.length;
+    };
+    await wipe('invoices', (d) => d.external !== true, 'invoices');
+    await wipe('expenses', (d) => !d.fileId, 'expenses');
+    await wipe('inbox', () => false, 'inbox');
+    await ctx.db.runTransaction(async (tx) => {
+      ctx.log(tx, { action: 'inbox.resetImports', entity: { kind: 'inbox', id: 'all' }, summary: `Importación reiniciada: ${counts.invoices} facturas, ${counts.expenses} gastos y ${counts.inbox} archivos del Inbox borrados` });
+    });
+    return counts;
+  },
+});
+
+export const inboxActions = [resetImports, undoManyInboxItems, createInboxItem, confirmInboxItem, discardInboxItem, attachDrive, updateProposals, removeInboxItems, undoInboxItem];

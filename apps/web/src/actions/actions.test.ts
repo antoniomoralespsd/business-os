@@ -212,6 +212,21 @@ describe('actions on MemoryDb', () => {
     expect((await all('albaranes')).find((x) => x.driveFileId === 'f-jun')).toMatchObject({ status: 'paid' });
   });
 
+  it('resets imports but keeps app invoices and manual expenses', async () => {
+    const { call, all } = setup();
+    await call('client.create', { name: 'Otto' });
+    const proposal = classifyDocument({ filename: 'x.pdf', mimeType: 'application/pdf', text: '' }, { issuer: { name: '', legalName: '', taxId: '' }, clients: [], subscriptions: [], today: '2026-10-07' });
+    const { id } = await call<{ id: string }>('inbox.create', { filename: 'x.pdf', mimeType: 'application/pdf', size: 1, sha256: 'c'.repeat(64), proposal });
+    await call('inbox.confirm', { id, kind: 'income', date: '2026-07-01', total: 1000, vatRate: 21, invoiceNumber: '1', clientId: 'otto' });
+    await call('expense.create', { date: '2026-07-01', vendor: 'Manual', total: 500, vatRate: 21, category: 'otros' });
+    await call('job.create', { clientId: 'otto', date: '2026-07-02', concept: 'Flyer', unitPrice: 3000 });
+    await call('invoice.draft', { clientId: 'otto', date: '2026-07-31', jobIds: [String((await all('jobs'))[0]!.id)] });
+    await expect(call('inbox.resetImports', { confirm: 'no' })).rejects.toThrow();
+    expect(await call('inbox.resetImports', { confirm: 'BORRAR' })).toEqual({ invoices: 1, expenses: 0, inbox: 1 });
+    expect((await all('invoices')).length).toBe(1);
+    expect((await all('expenses')).length).toBe(1);
+  });
+
   it('links a job to the task it came from', async () => {
     const { call, one } = setup();
     await call('client.create', { name: 'Icon' });

@@ -1,11 +1,13 @@
 'use client';
 import clsx from 'clsx';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useMemo, useState } from 'react';
 import type { Invoice } from '@bos/schemas';
 import { formatEUR, MONTHS } from '@bos/domain';
-import { Badge, Card, EmptyState, Loading, Segmented } from '@/components/ui/kit';
-import { useInbox, useInvoices } from '@/data/hooks';
+import { Badge, Button, Card, EmptyState, Loading, Segmented } from '@/components/ui/kit';
+import { act, useInbox, useInvoices } from '@/data/hooks';
 import { shortDate } from '@/lib/format';
 import { invoiceStatusText, invoiceTone } from './status';
 
@@ -73,6 +75,7 @@ export function InvoicesPanel({ clientId, onOpen }: { clientId?: string; onOpen:
             ]}
           />
         )}
+        {!clientId && <ResetImports count={(data ?? []).filter((i) => i.external).length} />}
         {pending > 0 && (
           <p className="text-[12.5px] text-ink-3">
             Pendiente de cobro: <span className="tabular font-semibold text-ink">{formatEUR(pending)}</span>
@@ -135,5 +138,30 @@ export function InvoiceRow({ inv, showClient, onOpen, link }: { inv: Invoice; sh
         )}
       </span>
     </li>
+  );
+}
+
+/** Clean slate: removes every imported invoice and expense and empties the Inbox (to import again). */
+export function ResetImports({ count }: { count: number }) {
+  const [open, setOpen] = useState(false);
+  if (!count) return null;
+  return (
+    <>
+      <Button size="sm" variant="ghost" icon={<Trash2 size={13} />} onClick={() => setOpen(true)}>
+        Borrar importadas ({count})
+      </Button>
+      <ConfirmDialog
+        open={open}
+        onOpenChange={setOpen}
+        danger
+        title="¿Borrar todo lo importado?"
+        description={`Se borran las ${count} facturas importadas, los gastos que vinieron del Inbox y todo lo que hay en el Inbox, para que puedas volver a importar la carpeta desde cero.\n\nNo se tocan: las facturas emitidas en la app, los gastos añadidos a mano, ni ningún archivo de Drive.`}
+        confirmLabel="Borrar y empezar de cero"
+        onConfirm={() => {
+          setOpen(false);
+          void act<{ invoices: number; expenses: number; inbox: number }>('inbox.resetImports', { confirm: 'BORRAR' }).then((r) => r && toast(`Borradas ${r.invoices} facturas, ${r.expenses} gastos y ${r.inbox} archivos del Inbox`));
+        }}
+      />
+    </>
   );
 }
