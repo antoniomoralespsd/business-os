@@ -4,10 +4,13 @@
   "packageManager": "pnpm@10.28.0",
   "scripts": {
     "dev": "pnpm --filter @bos/web dev",
-    "build": "pnpm --filter @bos/web build",
+    "build": "turbo run build --filter=@bos/web",
     "build:demo": "pnpm --filter @bos/web build:demo",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "seed": "pnpm --filter @bos/web seed"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.7"
   }
 }
