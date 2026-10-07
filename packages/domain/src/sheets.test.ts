@@ -13,7 +13,7 @@ const invoiceRows = [
   row({ B: 'Factura' }), row({}), row({}),
   row({ B: 'A la atención de', F: 'N.º de factura' }),
   row({ B: 'EJEMPLO SL', F: '528' }),
-  row({ B: 'B08778037' }),
+  row({ B: 'B00000000' }),
   row({ B: 'Calle 15', D: 'Proyecto', F: 'Fecha' }),
   row({ B: '08006 Barcelona', D: 'Diseños Otto', F: '1/07/2026' }),
   row({}), row({}),
@@ -39,7 +39,7 @@ describe('invoice sheets', () => {
 
   it('reads number, date, client, lines and totals with the cells to edit', () => {
     const d = parseSheetDoc(invoiceRows);
-    expect(d).toMatchObject({ number: '528', numberCell: 'F12', date: '2026-07-01', dateCell: 'F15', taxId: 'B08778037', project: 'Diseños Otto', base: 10500, vatRate: 21, vat: 2205, irpfRate: 15, irpf: 1575, total: 11130 });
+    expect(d).toMatchObject({ number: '528', numberCell: 'F12', date: '2026-07-01', dateCell: 'F15', taxId: 'B00000000', project: 'Diseños Otto', base: 10500, vatRate: 21, vat: 2205, irpfRate: 15, irpf: 1575, total: 11130 });
     expect(d.recipients[0]).toBe('EJEMPLO SL');
     expect(d.lines).toEqual([
       { concept: 'Feed + historia 5 JUN', quantity: 1, unitPrice: 2500, total: 2500 },
