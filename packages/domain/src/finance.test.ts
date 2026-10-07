@@ -228,3 +228,57 @@ describe('file name numbers', () => {
     expect(cd({ filename: 'FR0031 Obvio Barcelona FEB MAR Antonio Morales (31_03_26) - Factura.pdf', mimeType: 'application/pdf', text: '' }, ctx).invoiceNumber.value).toBe('FR0031');
   });
 });
+
+describe('VAT detection', () => {
+  const ctx = { issuer: { name: '', legalName: '', taxId: '12345678Z' }, clients: [], subscriptions: [], today: '2026-10-07' };
+  it('reads 21 % on a fuel ticket written as "21,00 %"', () => {
+    const text = 'ESTACION DE SERVICIO EJEMPLO\nB12345674\nSIN PLOMO 95 35,12 L\nTOTAL 50,00 EUR\nBASE IMP. 41,32 I.V.A. 21,00 % 8,68';
+    const p = cd({ filename: 'gasolina.jpg', mimeType: 'image/jpeg', text }, ctx);
+    expect(p.vatRate.value).toBe(21);
+    expect(p.category.value).toBe('transporte');
+    expect(p.total.value).toBe(5000);
+  });
+  it('reads the rate from a ticket table under an IVA header', () => {
+    const text = 'TIENDA\nTOTAL (€) 23,45\nIVA BASE IMPONIBLE (€) CUOTA (€)\n10% 21,32 2,13';
+    expect(cd({ filename: 't.jpg', mimeType: 'image/jpeg', text }, ctx).vatRate.value).toBe(10);
+  });
+  it('infers the rate from total and base when not printed', () => {
+    const text = 'Proveedor\nBase imponible 100,00 €\nTotal 121,00 €';
+    expect(cd({ filename: 'f.pdf', mimeType: 'application/pdf', text }, ctx).vatRate.value).toBe(21);
+  });
+  it('knows the cuota de autónomo has no VAT', () => {
+    const text = 'TESORERIA GENERAL DE LA SEGURIDAD SOCIAL\nRecibo de liquidación de cotizaciones\nRÉGIMEN ESPECIAL DE TRABAJADORES AUTÓNOMOS\nTotal 294,00';
+    const p = cd({ filename: 'cuota autonomo enero.pdf', mimeType: 'application/pdf', text }, ctx);
+    expect(p.vatRate.value).toBe(0);
+    expect(p.vendor.value).toBe('Seguridad Social');
+  });
+});
+
+import { looksLikeGarbage } from './classify';
+describe('broken PDF text', () => {
+  it('spots gibberish from web pages printed to PDF', () => {
+    expect(looksLikeGarbage('012341560 71859 9\u000b 4 ÿ ÿ 9\u000b25\u0015\u00160 25 33 6\u0016ÿ\u001d5\u001e\u001450\u00160 012341560ÿ ÿ 5 71859 9\u000b0')).toBe(true);
+    expect(looksLikeGarbage('Adobe Systems Software Ireland Ltd\nInvoice Number IEE1\nInvoice Date 05/10/2026\nSubtotal 49,99 €\nTotal 60,49 €')).toBe(false);
+  });
+});
+
+import { mergeAiExtraction } from './aiMerge';
+describe('AI merge', () => {
+  const ctx0 = { issuer: { name: '', legalName: '', taxId: '12345678Z' }, clients: [{ id: 'otto', name: 'Otto', legalName: '', taxId: '', aliases: [], status: 'active' as const }], subscriptions: [], today: '2026-10-07' };
+  const base = { documentType: 'invoice' as const, issuerName: null, issuerTaxId: null, customerName: null, customerTaxId: null, invoiceNumber: null, date: null, total: null, base: null, vatRate: null, vatAmount: null, irpfRate: null, isRectificativa: false, category: 'otros' as const, currency: 'EUR' };
+  it('takes amounts and VAT from the AI and keeps own-NIF logic for income', () => {
+    const rules = cd({ filename: 'x.pdf', mimeType: 'application/pdf', text: '' }, ctx0);
+    const p = mergeAiExtraction(rules, { ...base, issuerTaxId: '12345678-Z', customerName: 'Leger SL (Otto)', customerTaxId: 'B00000000', invoiceNumber: '528', date: '2026-07-01', total: 583, base: 550, vatAmount: 115.5, irpfRate: 15 }, { ownTaxId: '12345678Z', clients: ctx0.clients, folderKind: null });
+    expect(p.kind.value).toBe('income');
+    expect(p.total.value).toBe(58300);
+    expect(p.vatRate.value).toBe(21);
+    expect(p.clientId.value).toBe('otto');
+    expect(p.counterparty.value).toBe('Leger SL (Otto)');
+  });
+  it('forces 0 % VAT on social security receipts', () => {
+    const rules = cd({ filename: 'cuota.pdf', mimeType: 'application/pdf', text: '' }, ctx0);
+    const p = mergeAiExtraction(rules, { ...base, documentType: 'social_security', issuerName: 'TGSS', total: 294, vatRate: 21 }, { ownTaxId: '12345678Z', clients: [], folderKind: 'expense' });
+    expect(p.vatRate.value).toBe(0);
+    expect(p.total.value).toBe(29400);
+  });
+});

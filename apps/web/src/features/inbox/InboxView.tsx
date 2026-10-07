@@ -1,9 +1,10 @@
 'use client';
 import clsx from 'clsx';
-import { AlertTriangle, ChevronDown, CloudOff, FolderInput, FolderUp, HardDrive, RefreshCw, Trash2, UploadCloud, Wand2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, CloudOff, FolderInput, FolderUp, HardDrive, RefreshCw, Sparkles, Trash2, UploadCloud, Wand2, X } from 'lucide-react';
+import { aiUnavailable, onAiStatus } from '@/lib/aiExtract';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import type { Client, InboxItem } from '@bos/schemas';
 import { classifyDocument, formatEUR, todayISO } from '@bos/domain';
@@ -172,6 +173,7 @@ export function InboxView() {
 
         <DriveImport onImport={(f) => void pipe.importFromDrive(f)} busy={pipe.batch.running} />
         <BatchProgress b={pipe.batch} onClose={pipe.clearBatch} />
+        <AiStatus />
       </div>
 
       <div className="px-4 pt-8 md:px-8">
@@ -194,6 +196,21 @@ export function InboxView() {
             {pending.length > 0 && (
               <Button size="sm" variant="ghost" icon={<RefreshCw size={13} />} onClick={() => void reclassify()}>
                 Volver a clasificar
+              </Button>
+            )}
+            {pending.some((i) => i.drive) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Sparkles size={13} />}
+                loading={pipe.batch.running && pipe.batch.label === 'Releyendo'}
+                onClick={async () => {
+                  if (!(await ensureDrive(drive.account))) return;
+                  const skipped = await pipe.rereadPending(pending);
+                  if (skipped) toast(`${skipped} sin copia en Drive: vuelve a soltarlos para releerlos`);
+                }}
+              >
+                Releer pendientes
               </Button>
             )}
             {pending.length > 0 && (
@@ -385,6 +402,23 @@ export function DriveBar({ notInDrive = 0, waiting = 0, pendingMoves = 0, onSync
         Abrir Drive →
       </a>
     </div>
+  );
+}
+
+function AiStatus() {
+  const why = useSyncExternalStore(onAiStatus, aiUnavailable, () => null);
+  if (!why) return null;
+  return (
+    <p className="flex items-start gap-2 rounded-[10px] border border-line bg-surface px-3 py-2 text-[12.5px] text-ink-2">
+      <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warn" />
+      <span>
+        {why}. Se ha usado la lectura básica (menos precisa con fotos e IVA). Actívala en{' '}
+        <Link href="/settings" className="font-semibold underline">
+          Ajustes → Lectura con IA
+        </Link>{' '}
+        y pulsa «Releer pendientes».
+      </span>
+    </p>
   );
 }
 

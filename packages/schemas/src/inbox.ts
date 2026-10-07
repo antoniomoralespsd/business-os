@@ -117,3 +117,23 @@ export const GoogleSettingsSchema = z.object({
   billingAccount: z.string().email().nullable().default(null),
 });
 export type GoogleSettings = z.infer<typeof GoogleSettingsSchema>;
+
+/** What the AI reads from a document (all optional: null when not printed). */
+export const AiExtractionSchema = z.object({
+  documentType: z.enum(['invoice', 'simplified_invoice', 'receipt', 'social_security', 'tax_payment', 'bank', 'other']).catch('other'),
+  issuerName: z.string().nullable().catch(null),
+  issuerTaxId: z.string().nullable().catch(null),
+  customerName: z.string().nullable().catch(null),
+  customerTaxId: z.string().nullable().catch(null),
+  invoiceNumber: z.string().nullable().catch(null),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().catch(null),
+  total: z.number().nullable().catch(null),
+  base: z.number().nullable().catch(null),
+  vatRate: z.number().nullable().catch(null),
+  vatAmount: z.number().nullable().catch(null),
+  irpfRate: z.number().nullable().catch(null),
+  isRectificativa: z.boolean().catch(false),
+  category: z.enum(['software', 'hardware', 'material', 'impresion', 'transporte', 'formacion', 'telefono', 'gestoria', 'publicidad', 'comidas', 'otros']).catch('otros'),
+  currency: z.string().nullable().catch('EUR'),
+});
+export type AiExtraction = z.infer<typeof AiExtractionSchema>;

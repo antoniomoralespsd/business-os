@@ -108,6 +108,14 @@ export const KNOWN_VENDORS: { name: string; match: RegExp; category: string }[] 
   { name: 'Repsol', match: /\brepsol\b/, category: 'transporte' },
   { name: 'Cepsa', match: /\bcepsa\b|moeve/, category: 'transporte' },
   { name: 'Correos', match: /\bcorreos\b/, category: 'otros' },
+  { name: 'Seguridad Social', match: /seguridad social|tesoreria general|cuota (?:de )?autonomo|\breta\b/, category: 'otros' },
+  { name: 'Agencia Tributaria', match: /agencia tributaria|\baeat\b/, category: 'otros' },
+  { name: 'BP', match: /\bbp\b.*(?:estacion|carburante|gasoleo|gasolina)|(?:estacion|carburante).*\bbp\b/, category: 'transporte' },
+  { name: 'Shell', match: /\bshell\b/, category: 'transporte' },
+  { name: 'Galp', match: /\bgalp\b/, category: 'transporte' },
+  { name: 'Petronor', match: /\bpetronor\b/, category: 'transporte' },
+  { name: 'Plenoil', match: /\bplenoil\b/, category: 'transporte' },
+  { name: 'Ballenoil', match: /\bballenoil\b/, category: 'transporte' },
 ];
 
 /* ---------- extractors ---------- */
@@ -205,15 +213,40 @@ export function findBase(text: string): number | null {
   return null;
 }
 
-export function findVatRate(text: string): Guess<number> {
+const VALID_VAT = [0, 4, 5, 10, 21];
+/** Things that never carry VAT: social security (cuota de autónomo), taxes, insurance premiums, bank fees. */
+export const VAT_EXEMPT = /seguridad social|tesoreria general|\breta\b|cuota (?:de )?autonomo|regimen especial de trabajadores autonomos|agencia tributaria|\baeat\b|modelo (?:303|130|111)|prima de seguro|comision(?:es)? bancaria|exento de iva|exenta de iva|operacion exenta|inversion del sujeto pasivo|reverse charge/;
+
+/**
+ * VAT rate: the rate printed next to "IVA" (also "21,00 %" and ticket tables where the rate sits
+ * under an "IVA" header), else the one implied by total ÷ base, else exempt documents → 0.
+ */
+export function findVatRate(text: string, total?: number | null, base?: number | null): Guess<number> {
   const t = norm(text);
-  const m = t.match(/\b(?:iva|vat|igic)\b[^%\n]{0,20}?(\d{1,2}(?:[.,]\d)?)\s*%/) ?? t.match(/(\d{1,2})\s*%\s*(?:de\s+)?(?:iva|vat)/);
-  if (m) {
-    const r = Number(m[1]!.replace(',', '.'));
-    if ([0, 4, 5, 10, 21, 20, 23].includes(r)) return guess(r, 0.9, `Pone IVA ${r} %`);
+  if (VAT_EXEMPT.test(t)) return guess(0, 0.9, 'Documento sin IVA (cuota, impuesto, seguro o exento)');
+  const lines = t.split(/\r?\n/);
+  const votes = new Map<number, number>();
+  lines.forEach((l, i) => {
+    const near = /\b(iva|vat|igic|i\.v\.a)\b/.test(l) || /\b(iva|vat|i\.v\.a)\b/.test(lines[i - 1] ?? '') || /\b(iva|vat|i\.v\.a)\b/.test(lines[i - 2] ?? '');
+    if (!near || /irpf|retencion|descuento|dto/.test(l)) return;
+    for (const m of l.matchAll(/(\d{1,2})(?:[.,]0{1,2})?\s*%/g)) {
+      const r = Number(m[1]);
+      if (VALID_VAT.includes(r)) votes.set(r, (votes.get(r) ?? 0) + (r === 0 ? 0.5 : 1));
+    }
+    for (const m of l.matchAll(/\b(?:iva|vat|i\.v\.a)\.?\s*(?:al\s*)?(\d{1,2})(?:[.,]0{1,2})?\b(?!\s*[.,]\d)/g)) {
+      const r = Number(m[1]);
+      if (VALID_VAT.includes(r) && r > 0) votes.set(r, (votes.get(r) ?? 0) + 1);
+    }
+  });
+  const best = [...votes.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (best && best[0] > 0) return guess(best[0], 0.9, `Pone IVA ${best[0]} %`);
+  if (total && base && base > 0 && total > base) {
+    const ratio = total / base - 1;
+    const r = VALID_VAT.find((v) => v > 0 && Math.abs(ratio - v / 100) < 0.006);
+    if (r) return guess(r, 0.85, `Total ÷ base = IVA ${r} %`);
   }
-  if (/\bexento\b|exenta de iva|inversion del sujeto pasivo|reverse charge/.test(t)) return guess(0, 0.8, 'Documento exento de IVA');
-  return guess(21, 0.4, 'IVA general por defecto');
+  if (best) return guess(0, 0.6, 'Pone IVA 0 %');
+  return guess(21, 0.3, 'IVA general por defecto (compruébalo)');
 }
 
 export function findIrpf(text: string): Guess<number> {
@@ -410,14 +443,17 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
 
   /* amounts */
   const total = findTotal(text);
-  const vatRate = findVatRate(text);
+  const baseEarly = findBase(text);
+  const vatRate = findVatRate(text, total.value, baseEarly);
   const irpfRate = kind.value === 'income' ? findIrpf(text) : guess(0, 0.6, 'Gasto sin retención');
   const baseFound = findBase(text);
   let base: Guess<number> = none();
   if (baseFound !== null) base = guess(baseFound, 0.8, 'Base imponible indicada');
   else if (total.value !== null && vatRate.value !== null) base = guess(splitVat(total.value, vatRate.value).base, Math.min(total.confidence, vatRate.confidence), 'Calculada desde el total');
 
-  const category: Guess<string> = kind.value === 'expense' ? (known ? guess(known.category, 0.8, `${known.name} → ${known.category}`) : guess('otros', 0.3, 'Sin categoría clara')) : none();
+  const fuel = /gasolina|gasoleo|diesel|carburante|estacion de servicio|\be\.s\.|sin plomo|\bsp95\b|\bsp98\b|adblue/.test(hay);
+  const category: Guess<string> =
+    kind.value !== 'expense' ? none() : known ? guess(known.category, 0.8, `${known.name} → ${known.category}`) : fuel ? guess('transporte', 0.8, 'Combustible') : guess('otros', 0.3, 'Sin categoría clara');
   const subscriptionId: Guess<ID> = sub && kind.value === 'expense' ? guess(sub.id, 0.75, `Cobro de ${sub.name}`) : none();
 
   return {
@@ -449,4 +485,16 @@ export function suggestFilename(p: Pick<InboxProposal, 'date' | 'vendor' | 'tota
     .toUpperCase();
   const amount = p.total.value !== null ? `_${(p.total.value / 100).toFixed(2).replace('.', ',')}` : '';
   return `${p.date.value ?? 'sin-fecha'}_${slug}${amount}${ext ? `.${ext.replace(/^\./, '')}` : ''}`;
+}
+
+/**
+ * PDFs "printed" from web pages often carry broken fonts: the text layer is gibberish
+ * ("012341560 71859 9ÿ…"). Then the page has to be read as an image (OCR / AI).
+ */
+export function looksLikeGarbage(text: string): boolean {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  if (tokens.length < 8) return true;
+  const wordlike = tokens.filter((w) => /^[a-záéíóúüñç]{3,}[.,:;]?$/i.test(w) && /[aeiouáéíóú]/i.test(w)).length;
+  const odd = (text.match(/[ÿ\u0000-\u0008\u000b\u000c\u000e-\u001f�]|&#\d+;/g) ?? []).length;
+  return wordlike / tokens.length < 0.25 || odd / Math.max(1, text.length) > 0.02;
 }

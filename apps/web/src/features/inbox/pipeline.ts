@@ -2,11 +2,12 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import type { Client, DriveLayout, DriveRef, InboxItem, IssuerSettings, Subscription } from '@bos/schemas';
-import { classifyDocument, todayISO } from '@bos/domain';
+import { classifyDocument, mergeAiExtraction, pathHints, todayISO } from '@bos/domain';
 import { useGoogleSettings } from '@/data/hooks';
 import { callAction } from '@/lib/actionsClient';
 import { DATA_MODE } from '@/lib/config';
 import { billingFolderId, connectDrive, download, DriveAuthNeeded, hasToken, inboxFolderId, moveTo, onDriveTokens, uploadTo, walk, warmUpDrive } from '@/lib/drive';
+import { aiExtract } from '@/lib/aiExtract';
 import { documentText, extOf, sha256 } from '@/lib/fileTools';
 import { verdictFor, type PickedFile } from '@/lib/folderFiles';
 
@@ -90,6 +91,20 @@ async function targetFor(account: string, layout: DriveLayout | null, it: InboxI
   return { folder, name: keep ? undefined : f.name };
 }
 
+/** Rules first (instant, offline), then AI on top when it's available. */
+export async function readDocument(file: File, path: string, c: Ctx) {
+  const { text } = await documentText(file);
+  const cctx = classifyCtx(c);
+  const rules = classifyDocument({ filename: file.name, mimeType: file.type, text, path }, cctx);
+  const ai = await aiExtract(file, {
+    path,
+    owner: { name: c.issuer?.legalName || c.issuer?.name || '', taxId: c.issuer?.taxId ?? '' },
+    clients: (c.clients ?? []).filter((x) => x.status !== 'archived').map((x) => x.name),
+  });
+  const proposal = ai ? mergeAiExtraction(rules, ai, { ownTaxId: cctx.issuer.taxId, clients: cctx.clients, folderKind: pathHints(path).kind }) : rules;
+  return { text, proposal, ai: !!ai };
+}
+
 export function useInboxPipeline(ctx: Ctx) {
   const { enabled, account, layout } = useDrive();
   const [batch, setBatch] = useState<BatchState>(EMPTY);
@@ -137,8 +152,7 @@ export function useInboxPipeline(ctx: Ctx) {
   /** Reads a file, proposes a classification and creates the Inbox item. */
   const ingest = useCallback(async (file: File, path: string, hash: string): Promise<string> => {
     const isPdf = file.type === 'application/pdf' || extOf(file.name) === 'pdf';
-    const { text } = await documentText(file);
-    const proposal = classifyDocument({ filename: file.name, mimeType: file.type, text, path }, classifyCtx(ctxRef.current));
+    const { text, proposal } = await readDocument(file, path, ctxRef.current);
     const r = await callAction<{ id: string }>('inbox.create', {
       filename: file.name.slice(0, 250),
       mimeType: file.type || (isPdf ? 'application/pdf' : 'application/octet-stream'),
@@ -153,14 +167,35 @@ export function useInboxPipeline(ctx: Ctx) {
   }, []);
 
   /** Re-reads a pending item that never got text (photos uploaded before OCR existed). */
-  const reread = useCallback(async (existing: InboxItem, file: File, path: string) => {
-    if (existing.status !== 'needs_confirmation' || existing.textExcerpt.replace(/\s/g, '').length >= 30) return false;
-    const { text } = await documentText(file);
-    if (!text.trim()) return false;
-    const proposal = classifyDocument({ filename: existing.filename, mimeType: existing.mimeType, text, path: existing.sourcePath || path }, classifyCtx(ctxRef.current));
+  const reread = useCallback(async (existing: InboxItem, file: File, path: string, force = false) => {
+    if (existing.status !== 'needs_confirmation') return false;
+    if (!force && existing.textExcerpt.replace(/\s/g, '').length >= 30 && existing.proposal.total.value !== null) return false;
+    const { text, proposal } = await readDocument(new File([file], existing.filename, { type: existing.mimeType || file.type }), existing.sourcePath || path, ctxRef.current);
     await callAction('inbox.updateProposals', { items: [{ id: existing.id, proposal, textExcerpt: text.slice(0, 4000) }] });
     return true;
   }, []);
+
+  /** Reads pending files again (from Drive) with the best method available — AI when active. */
+  const rereadPending = useCallback(
+    async (list: InboxItem[]) => {
+      const { account: acc } = accRef.current;
+      const withFile = list.filter((i) => i.drive && i.drive.account === acc);
+      setBatch({ ...EMPTY, label: 'Releyendo', total: withFile.length, running: true });
+      await pool(withFile, 3, async (it) => {
+        try {
+          const blob = await download(acc!, it.drive!.fileId);
+          if (await reread(it, new File([blob], it.filename, { type: it.mimeType }), it.sourcePath, true)) bump((b) => ({ reread: b.reread + 1 }));
+        } catch (e) {
+          bump((b) => ({ errors: [...b.errors, { name: it.filename, message: e instanceof Error ? e.message : 'Error' }] }));
+        } finally {
+          bump((b) => ({ done: b.done + 1 }));
+        }
+      });
+      bump({ running: false });
+      return list.length - withFile.length;
+    },
+    [reread],
+  );
 
   /** Files dropped or picked from the computer. */
   const process = useCallback(
@@ -299,5 +334,5 @@ export function useInboxPipeline(ctx: Ctx) {
     return removed;
   }, []);
 
-  return { batch, process, importFromDrive, syncDrive, removeItems, waitingCount, pendingMoves, clearBatch: () => setBatch(EMPTY) };
+  return { batch, process, importFromDrive, rereadPending, syncDrive, removeItems, waitingCount, pendingMoves, clearBatch: () => setBatch(EMPTY) };
 }

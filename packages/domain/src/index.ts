@@ -8,3 +8,4 @@ export * from './tasks/order';
 export * from './tasks/quickAdd';
 export * from './tasks/filter';
 export * from './sheets';
+export * from './aiMerge';

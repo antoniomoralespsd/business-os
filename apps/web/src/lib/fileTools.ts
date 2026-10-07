@@ -1,4 +1,5 @@
 'use client';
+import { looksLikeGarbage } from '@bos/domain';
 import { STATIC_EXPORT } from './config';
 
 /** SHA-256 of a file, hex (duplicate detection). */
@@ -96,7 +97,7 @@ export async function scannedPdfText(file: Blob): Promise<string> {
     pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
     const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
     const out: string[] = [];
-    for (let p = 1; p <= Math.min(doc.numPages, 2); p++) {
+    for (let p = 1; p <= Math.min(doc.numPages, 3); p++) {
       const page = await doc.getPage(p);
       const vp = page.getViewport({ scale: 2 });
       const c = document.createElement('canvas');
@@ -116,7 +117,7 @@ export async function documentText(file: File): Promise<{ text: string; ocr: boo
   const isPdf = file.type === 'application/pdf' || extOf(file.name) === 'pdf';
   if (isPdf) {
     const t = await pdfText(file).catch(() => '');
-    if (t.replace(/\s/g, '').length > 30) return { text: t, ocr: false };
+    if (t.replace(/\s/g, '').length > 30 && !looksLikeGarbage(t)) return { text: t, ocr: false };
     return { text: await scannedPdfText(file), ocr: true };
   }
   if (file.type.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(file.name)) return { text: await imageText(file), ocr: true };

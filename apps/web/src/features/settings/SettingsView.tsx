@@ -37,6 +37,7 @@ export function SettingsView() {
         <IssuerSection />
         <VaultSection />
         <AccountsSection />
+        <AiSection />
         <BackupSection />
         <SessionSection />
       </div>
@@ -395,6 +396,76 @@ function AgencyFolder() {
         </ul>
       )}
     </Card>
+  );
+}
+
+/* ---------- AI reading ---------- */
+
+function AiSection() {
+  const [state, setState] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+  const [msg, setMsg] = useState('');
+  const test = async () => {
+    setState('testing');
+    // A tiny fake ticket drawn on the fly.
+    const c = document.createElement('canvas');
+    c.width = 480;
+    c.height = 260;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = '#000';
+    g.font = '22px sans-serif';
+    ['GASOLINERA EJEMPLO SL', 'B12345674', 'FECHA 05/10/2026', 'BASE 41,32  IVA 21% 8,68', 'TOTAL 50,00 EUR'].forEach((l, i) => g.fillText(l, 20, 40 + i * 44));
+    const b64 = c.toDataURL('image/jpeg', 0.9).split(',')[1]!;
+    try {
+      const res = await fetch('/api/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mimeType: 'image/jpeg', data: b64, filename: 'prueba.jpg' }) });
+      const json = (await res.json()) as { ok: boolean; data?: { total: number | null; vatRate: number | null }; error?: string };
+      if (json.ok && json.data) {
+        setState('ok');
+        setMsg(`Funciona: ha leído total ${json.data.total ?? '—'} € e IVA ${json.data.vatRate ?? '—'} %.`);
+      } else {
+        setState('error');
+        setMsg(json.error ?? 'No responde');
+      }
+    } catch (e) {
+      setState('error');
+      setMsg(e instanceof Error ? e.message : 'Error');
+    }
+  };
+  const P = 'bussiness-os';
+  const who = 'authuser=antoniomorales.psd@gmail.com';
+  return (
+    <Section title="Lectura con IA" description="Lee facturas, tickets y fotos con Gemini (Google Cloud, servidores en Europa) en lugar de la lectura básica: importes, IVA, fechas y nombres mucho más fiables. Coste: céntimos al mes.">
+      {DATA_MODE !== 'firestore' ? (
+        <p className="text-[12.5px] text-ink-3">En la demo no está disponible.</p>
+      ) : (
+        <div className="space-y-3">
+          <ol className="list-decimal space-y-2 pl-5 text-[13px] text-ink-2">
+            <li>
+              Activa la API (con antoniomorales.psd):{' '}
+              <a className="font-semibold underline" target="_blank" rel="noreferrer" href={`https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=${P}&${who}`}>
+                Vertex AI API → Habilitar
+              </a>
+            </li>
+            <li>
+              Da permiso a la app:{' '}
+              <a className="font-semibold underline" target="_blank" rel="noreferrer" href={`https://console.cloud.google.com/iam-admin/iam?project=${P}&${who}`}>
+                IAM → Conceder acceso
+              </a>
+              . En «Principales nuevas» pega <code className="rounded bg-surface-2 px-1 text-[12px]">firebase-app-hosting-compute@{P}.iam.gserviceaccount.com</code> y elige el rol <strong>Usuario de Vertex AI</strong>.
+            </li>
+            <li>Pulsa «Probar».</li>
+          </ol>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button loading={state === 'testing'} onClick={() => void test()}>
+              Probar
+            </Button>
+            {state === 'ok' && <Badge tone="ok">{msg}</Badge>}
+            {state === 'error' && <span className="text-[12.5px] text-danger">{msg}</span>}
+          </div>
+        </div>
+      )}
+    </Section>
   );
 }
 
