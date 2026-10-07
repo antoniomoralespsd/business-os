@@ -9,8 +9,9 @@ import { InvoiceSheet } from './InvoiceSheet';
 import { InvoicesPanel } from './InvoicesPanel';
 import { JobsPanel } from './JobsPanel';
 import { QuarterPanel } from './QuarterPanel';
+import { SheetsPanel } from './SheetsPanel';
 
-type Tab = 'summary' | 'jobs' | 'invoices' | 'expenses' | 'quarters';
+type Tab = 'summary' | 'jobs' | 'invoices' | 'sheets' | 'expenses' | 'quarters';
 
 export function BillingView() {
   const params = useSearchParams();
@@ -63,6 +64,7 @@ export function BillingView() {
             { value: 'summary', label: 'Resumen', count: alerts.length },
             { value: 'jobs', label: 'Trabajos pendientes', count: (jobs ?? []).filter((j) => !j.invoiceId && !j.archived).length },
             { value: 'invoices', label: 'Facturas' },
+            { value: 'sheets', label: 'Hojas en Drive' },
             { value: 'expenses', label: 'Gastos', count: (expenses ?? []).filter((e) => e.status === 'pending' && !e.archived).length },
             { value: 'quarters', label: 'Trimestres' },
           ]}
@@ -93,6 +95,7 @@ export function BillingView() {
         )}
         {tab === 'jobs' && <JobsPanel onInvoiceCreated={setInvoiceId} />}
         {tab === 'invoices' && <InvoicesPanel onOpen={setInvoiceId} />}
+        {tab === 'sheets' && <SheetsPanel />}
         {tab === 'expenses' && <ExpensesPanel initialFilter={params.get('filter') === 'pending' ? 'pending' : undefined} />}
         {tab === 'quarters' && <QuarterPanel />}
       </div>

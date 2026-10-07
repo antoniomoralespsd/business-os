@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { z } from 'zod';
 import { toast } from 'sonner';
 import {
+  AlbaranSchema,
   ClientSchema,
   ExpenseSchema,
   GoogleSettingsSchema,
@@ -55,6 +56,7 @@ export const useInvoices = (filters: Filter[] = []) => useCollection('invoices',
 export const useExpenses = (filters: Filter[] = []) => useCollection('expenses', ExpenseSchema, filters);
 export const useSubscriptions = () => useCollection('subscriptions', SubscriptionSchema);
 export const useInbox = () => useCollection('inbox', InboxItemSchema);
+export const useAlbaranes = () => useCollection('albaranes', AlbaranSchema);
 export const useVaultEntries = (filters: Filter[] = []) => useCollection('vault', VaultEntrySchema, filters);
 
 export function useIssuer(): IssuerSettings | null {

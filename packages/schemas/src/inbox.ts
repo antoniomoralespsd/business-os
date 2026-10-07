@@ -34,7 +34,12 @@ export const DriveRefSchema = z.object({
   fileId: z.string().min(1).max(200),
   name: z.string().max(300),
   folder: z.string().max(400).default(''),
+  folderId: z.string().max(200).default(''),
   webViewLink: z.string().url().max(600),
+  /** Already in its final folder. */
+  filed: z.boolean().default(false),
+  /** Keep the original name when filing (files that were already in your Drive, your own invoices). */
+  keepName: z.boolean().default(false),
 });
 export type DriveRef = z.infer<typeof DriveRefSchema>;
 
@@ -90,11 +95,23 @@ export const ConfirmInboxInput = z.object({
   /** Income already collected (old invoices). */
   paid: z.boolean().default(false),
   /** Create the client from the invoice data (reused if a client with that NIF already exists). */
-  newClient: z.object({ name: z.string().trim().min(1).max(120), taxId: z.string().max(32).default('') }).nullable().default(null),
+  newClient: z.object({ name: z.string().trim().min(1).max(120), taxId: z.string().max(32).default(''), legalName: z.string().max(160).default('') }).nullable().default(null),
 });
+
+/** Your agency folder in Drive and its numbered subfolders. */
+export const DriveLayoutSchema = z.object({
+  rootId: z.string().min(1).max(200),
+  rootName: z.string().max(200),
+  yearsId: z.string().max(200).nullable().default(null),
+  editablesId: z.string().max(200).nullable().default(null),
+  albaranesId: z.string().max(200).nullable().default(null),
+  rectificativasId: z.string().max(200).nullable().default(null),
+});
+export type DriveLayout = z.infer<typeof DriveLayoutSchema>;
 
 /** Google accounts connected for Drive (no tokens: those stay in the browser). */
 export const GoogleSettingsSchema = z.object({
+  layout: DriveLayoutSchema.nullable().default(null),
   accounts: z.array(z.object({ email: z.string().email(), addedAt: z.string().default('') })).default([]),
   /** Account whose Drive keeps invoices and receipts. */
   billingAccount: z.string().email().nullable().default(null),

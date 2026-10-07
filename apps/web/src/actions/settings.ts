@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CipherSchema, GoogleSettingsSchema, IssuerSettingsInput, UpdateVaultEntryInput, VaultEntryInput, VaultMetaSchema } from '@bos/schemas';
+import { CipherSchema, DriveLayoutSchema, GoogleSettingsSchema, IssuerSettingsInput, UpdateVaultEntryInput, VaultEntryInput, VaultMetaSchema } from '@bos/schemas';
 import { ActionError, baseFields, clean, defineAction } from './define';
 
 export const updateIssuer = defineAction({
@@ -25,6 +25,7 @@ export const updateGoogle = defineAction({
     add: z.string().email().optional(),
     remove: z.string().email().optional(),
     billingAccount: z.string().email().nullable().optional(),
+    layout: DriveLayoutSchema.nullable().optional(),
   }),
   critical: false,
   handler: async (ctx, input) => {
@@ -38,8 +39,9 @@ export const updateGoogle = defineAction({
       if (input.billingAccount !== undefined) billing = input.billingAccount;
       if (billing && !accounts.some((a) => a.email === billing)) billing = null;
       if (!billing && accounts.length) billing = accounts[0]!.email;
-      tx.set(ref, { accounts, billingAccount: billing, updatedAt: ctx.now });
-      const what = input.add ? `Cuenta de Google conectada: ${input.add}` : input.remove ? `Cuenta de Google quitada: ${input.remove}` : `Facturación se guarda en ${billing ?? '—'}`;
+      const layout = input.layout !== undefined ? input.layout : cur.layout;
+      tx.set(ref, { accounts, billingAccount: billing, layout, updatedAt: ctx.now });
+      const what = input.layout !== undefined ? (input.layout ? `Carpeta de la agencia: ${input.layout.rootName}` : 'Carpeta de la agencia quitada') : input.add ? `Cuenta de Google conectada: ${input.add}` : input.remove ? `Cuenta de Google quitada: ${input.remove}` : `Facturación se guarda en ${billing ?? '—'}`;
       ctx.log(tx, { action: 'settings.google', entity: { kind: 'settings', id: 'google' }, summary: what });
     });
     return { ok: true };

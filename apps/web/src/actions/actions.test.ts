@@ -162,6 +162,52 @@ describe('actions on MemoryDb', () => {
     expect(await one('settings', 'google')).toMatchObject({ billingAccount: 'a9214@esdi.edu.es' });
   });
 
+  it('removes pending uploads, undoes a confirmation and links an already registered invoice', async () => {
+    const { call, one, all } = setup();
+    await call('client.create', { name: 'Otto' });
+    const ctx = { issuer: { name: '', legalName: '', taxId: '' }, clients: [], subscriptions: [], today: '2026-10-07' };
+    const mk = async (n: number) => {
+      const proposal = classifyDocument({ filename: `f${n}.pdf`, mimeType: 'application/pdf', text: '' }, ctx);
+      return (await call<{ id: string }>('inbox.create', { filename: `f${n}.pdf`, mimeType: 'application/pdf', size: 1, sha256: String(n).repeat(64).slice(0, 64), proposal })).id;
+    };
+    const [a, b, c] = [await mk(1), await mk(2), await mk(3)];
+    const inv = await call<{ id: string }>('inbox.confirm', { id: a, kind: 'income', date: '2026-07-01', total: 58300, vatRate: 21, irpfRate: 15, invoiceNumber: '0528', clientId: 'otto' });
+    // Same invoice again (PDF from Drive + PDF from the PC) → linked, not duplicated.
+    const again = await call<{ id: string; duplicate?: boolean }>('inbox.confirm', { id: b, kind: 'income', date: '2026-07-01', total: 58300, vatRate: 21, irpfRate: 15, invoiceNumber: '528', clientId: 'otto' });
+    expect(again).toMatchObject({ id: inv.id, duplicate: true });
+    expect((await all('invoices')).length).toBe(1);
+    // Undo the linked one: the invoice stays (it belongs to the other file).
+    await call('inbox.undo', { id: b });
+    expect((await all('invoices')).length).toBe(1);
+    // Undo the original: its imported invoice goes away and the file is pending again.
+    await call('inbox.undo', { id: a });
+    expect((await all('invoices')).length).toBe(0);
+    expect((await one('inbox', a)).status).toBe('needs_confirmation');
+    // Remove pending ones; completed ones are protected.
+    await call('inbox.confirm', { id: c, kind: 'other', date: '2026-07-01', total: 0, vatRate: 0 });
+    expect((await call<{ removed: number }>('inbox.remove', { ids: [a, b, c] })).removed).toBe(2);
+    expect((await all('inbox')).map((d) => d.id)).toEqual([c]);
+  });
+
+  it('syncs, numbers by date and marks albaranes as collected', async () => {
+    const { call, all } = setup();
+    const base = { recipients: ['Level barcelona'], clientIds: [], lines: 3 };
+    await call('albaran.sync', { items: [
+      { ...base, driveFileId: 'f-ago', driveName: 'ALBARAN LEVEL AGOSTO 2026', title: 'LEVEL AGOSTO 2026', date: '2026-08-31', total: 70000 },
+      { ...base, driveFileId: 'f-jun', driveName: 'ALBARAN LEVEL JUNIO 2026', title: 'LEVEL JUNIO 2026', date: '2026-06-30', total: 50000 },
+    ] });
+    const r = await call<{ numbered: { id: string; number: number }[] }>('albaran.number', { restart: true });
+    const rows = await all('albaranes');
+    const byFile = (f: string) => rows.find((x) => x.driveFileId === f)!;
+    expect(r.numbered.find((n) => n.id === byFile('f-jun').id)?.number).toBe(1);
+    expect(r.numbered.find((n) => n.id === byFile('f-ago').id)?.number).toBe(2);
+    await call('albaran.sync', { items: [{ ...base, driveFileId: 'f-sep', driveName: 'x', title: 'LEVEL SEPTIEMBRE', date: '2026-09-30', total: 1000 }] });
+    const r2 = await call<{ numbered: { number: number }[] }>('albaran.number', { restart: false });
+    expect(r2.numbered.map((n) => n.number)).toEqual([3]);
+    await call('albaran.update', { id: String(byFile('f-jun').id), patch: { status: 'paid' } });
+    expect((await all('albaranes')).find((x) => x.driveFileId === 'f-jun')).toMatchObject({ status: 'paid' });
+  });
+
   it('links a job to the task it came from', async () => {
     const { call, one } = setup();
     await call('client.create', { name: 'Icon' });

@@ -5,3 +5,4 @@ export * from './activity';
 export * from './billing';
 export * from './inbox';
 export * from './vault';
+export * from './albaran';

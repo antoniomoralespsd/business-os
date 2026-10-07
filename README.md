@@ -29,7 +29,7 @@ Abre http://localhost:3000. Los datos viven en memoria/localStorage del navegado
 8. **Clientes iniciales**: `pnpm seed`.
 9. **Arrancar**: `pnpm dev` → entra con Google.
 10. **Publicar**: Compilación → App Hosting → conectar el repo de GitHub, raíz `apps/web`. Rellena los valores de `apps/web/apphosting.yaml`.
-11. **Google Drive (para el Inbox)**: habilita la API una vez en https://console.cloud.google.com/apis/library/drive.googleapis.com?project=bussiness-os y conecta la cuenta en Ajustes → Cuentas de Google. Firebase Storage ya no hace falta.
+11. **Google Drive**: habilita Google Drive API y Google Sheets API en el proyecto, conecta la cuenta en Ajustes → Cuentas de Google y elige la carpeta de la agencia. Firebase Storage no hace falta.
 
 ## Estructura
 

@@ -199,5 +199,32 @@ describe('document classifier', () => {
     expect(p.date.value).toBe('2025-11-12');
     expect(p.vendor.value).toBe('MERCADONA, S.A.');
   });
+
+  it('reads an invoice made from the Sheets template (labels in header rows, values below)', () => {
+    const text = [
+      'Antonio Morales Conde', '12345678Z', 'Calle Falsa 1', '08000, Barcelona', 'Factura',
+      'A la atención de N.º de factura', 'EJEMPLO OCIO SL 495', 'B-87654321', 'Calle Mayor 38. Proyecto Fecha', 'Diseños 30/03/2026', '08001 BARCELONA',
+      'Descripción Cantidad Precio unitario Precio total', 'Feed + historia 6 7 mar 30,00 €', '1 30,00 €',
+      'Base imponible 120,00 €', 'Cuota de IVA (21%) 25,20 €', 'Retención IRPF (15%) -18,00 €', '127,20 €', 'Forma de pago Transferencia bancaria',
+    ].join('\n');
+    const p = classifyDocument({ filename: '0495 Ejemplo MARZO Antonio Morales (30_03_26) - Factura.pdf', mimeType: 'application/pdf', text, path: '2026/03 MARZO/INGRESOS/x.pdf' }, ctx);
+    expect(p.kind.value).toBe('income');
+    expect(p.invoiceNumber.value).toBe('0495');
+    expect(p.counterparty.value).toBe('EJEMPLO OCIO SL');
+    expect(p.taxId.value).toBe('B87654321');
+    expect(p.date.value).toBe('2026-03-30');
+    expect(p.total.value).toBe(12720);
+    expect(p.base.value).toBe(12000);
+    expect(p.irpfRate.value).toBe(15);
+  });
 });
 
+
+import { classifyDocument as cd } from './classify';
+describe('file name numbers', () => {
+  const ctx = { issuer: { name: '', legalName: '', taxId: '' }, clients: [], subscriptions: [], today: '2026-10-07' };
+  it('does not take a year-number name for a 4-digit number', () => {
+    expect(cd({ filename: 'F2026-011.pdf', mimeType: 'application/pdf', text: '' }, ctx).invoiceNumber.value).toBe('F2026-011');
+    expect(cd({ filename: 'FR0031 Obvio Barcelona FEB MAR Antonio Morales (31_03_26) - Factura.pdf', mimeType: 'application/pdf', text: '' }, ctx).invoiceNumber.value).toBe('FR0031');
+  });
+});

@@ -21,7 +21,10 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import type { ID, ISODate, Task } from '@bos/schemas';
 import {
   addDays,
+  addMonths,
   bucketCounts,
+  formatMonth,
+  monthGridDays,
   dayOfMonth,
   DEFAULT_FILTER,
   formatLongDay,
@@ -87,8 +90,11 @@ function TasksBoardView() {
   const [openId, setOpenId] = useState<ID | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ID | null>(null);
 
-  const days = useMemo(() => weekDays(anchor), [anchor]);
-  const range = useMemo(() => ({ from: days[0]!, to: days[6]! }), [days]);
+  const [view, setView] = usePersistentState<'week' | 'month'>('bos.tasks.view', 'week');
+  const monthMode = view === 'month' && !isMobile;
+  const days = useMemo(() => (monthMode ? monthGridDays(anchor) : weekDays(anchor)), [anchor, monthMode]);
+  const range = useMemo(() => ({ from: days[0]!, to: days[days.length - 1]! }), [days]);
+  const step = useCallback((dir: 1 | -1) => setAnchor((a) => (view === 'month' ? addMonths(a, dir) : addDays(a, 7 * dir))), [view]);
   const board = useTasksBoard(range);
   const { tasks, clients, clientsById, actions } = board;
 
@@ -201,13 +207,15 @@ function TasksBoardView() {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
       if (el.closest('input, textarea, select, [contenteditable], [role="dialog"], [role="menu"]')) return;
-      if (e.key === 'ArrowLeft') setAnchor((a) => addDays(a, -7));
-      if (e.key === 'ArrowRight') setAnchor((a) => addDays(a, 7));
+      if (e.key === 'ArrowLeft') step(-1);
+      if (e.key === 'ArrowRight') step(1);
       if (e.key.toLowerCase() === 't') setAnchor(todayISO());
+      if (e.key.toLowerCase() === 'm') setView('month');
+      if (e.key.toLowerCase() === 's') setView('week');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [step, setView]);
 
   useEffect(() => {
     if (isMobile && (mobileDay < range.from || mobileDay > range.to)) setAnchor(mobileDay);
@@ -242,7 +250,7 @@ function TasksBoardView() {
       {/* ---------- Toolbar ---------- */}
       <div className="mt-4 flex flex-wrap items-center gap-2 border-b border-line px-4 pb-3 md:px-8">
         <div className="flex items-center gap-1">
-          <IconBtn label="Semana anterior" onClick={() => (isMobile ? setMobileDay((d) => addDays(d, -1)) : setAnchor((a) => addDays(a, -7)))}>
+          <IconBtn label={monthMode ? 'Mes anterior' : 'Semana anterior'} onClick={() => (isMobile ? setMobileDay((d) => addDays(d, -1)) : step(-1))}>
             <ChevronLeft size={16} />
           </IconBtn>
           <button
@@ -255,12 +263,12 @@ function TasksBoardView() {
           >
             HOY
           </button>
-          <IconBtn label="Semana siguiente" onClick={() => (isMobile ? setMobileDay((d) => addDays(d, 1)) : setAnchor((a) => addDays(a, 7)))}>
+          <IconBtn label={monthMode ? 'Mes siguiente' : 'Semana siguiente'} onClick={() => (isMobile ? setMobileDay((d) => addDays(d, 1)) : step(1))}>
             <ChevronRight size={16} />
           </IconBtn>
         </div>
         <label className="relative ml-1 cursor-pointer">
-          <span className="text-[14px] font-semibold first-letter:uppercase">{isMobile ? formatLongDay(mobileDay) : formatWeekRange(days)}</span>
+          <span className="text-[14px] font-semibold first-letter:uppercase">{isMobile ? formatLongDay(mobileDay) : monthMode ? formatMonth(anchor) : formatWeekRange(days)}</span>
           <input
             type="date"
             value={isMobile ? mobileDay : anchor}
@@ -273,6 +281,16 @@ function TasksBoardView() {
             aria-label="Ir a fecha"
           />
         </label>
+
+        {!isMobile && (
+          <div className="ml-2 inline-flex rounded-[6px] border border-line bg-surface p-0.5" role="tablist" aria-label="Vista">
+            {(['week', 'month'] as const).map((v) => (
+              <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} className={clsx('rounded-[4px] px-2.5 py-1 text-[12px] font-semibold', view === v ? 'bg-ink text-on-ink' : 'text-ink-2 hover:text-ink')}>
+                {v === 'week' ? 'Semana' : 'Mes'}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <div className="relative">
@@ -346,6 +364,46 @@ function TasksBoardView() {
             undatedIds={containers[NONE] ?? []}
             onCreateUndated={(text) => create(null, text)}
           />
+        ) : monthMode ? (
+          <div className="flex min-h-0 flex-1">
+            <div className="scroll-thin min-w-0 flex-1 overflow-auto">
+              <MonthGrid
+                days={days}
+                month={anchor.slice(0, 7)}
+                today={today}
+                showWeekend={showWeekend}
+                loading={loading}
+                count={(d) => (grouped.get(d) ?? []).length}
+                renderCell={(d) => (
+                  <>
+                    <DroppableList id={containerOf(d)} items={containers[containerOf(d)] ?? []} className="min-h-[28px]">
+                      {renderList(containerOf(d))}
+                    </DroppableList>
+                    <QuickAdd onCreate={(text) => create(d, text)} />
+                  </>
+                )}
+                onPickDay={(d) => {
+                  setView('week');
+                  setAnchor(d);
+                }}
+              />
+            </div>
+            {showUndated && (
+              <aside className="flex w-[232px] shrink-0 flex-col border-l border-line bg-surface/40">
+                <div className="flex items-center gap-2 px-3 pb-2 pt-4">
+                  <Inbox size={14} className="text-ink-2" />
+                  <span className="eyebrow text-ink">Sin fecha</span>
+                  <span className="tabular ml-auto text-[11px] text-ink-3">{(containers[NONE] ?? []).length}</span>
+                </div>
+                <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-6">
+                  <DroppableList id={NONE} items={containers[NONE] ?? []} className="min-h-[64px]">
+                    {renderList(NONE)}
+                  </DroppableList>
+                  <QuickAdd onCreate={(text) => create(null, text)} />
+                </div>
+              </aside>
+            )}
+          </div>
         ) : (
           <div className="flex min-h-0 flex-1">
             <div className="scroll-thin min-w-0 flex-1 overflow-x-auto">
@@ -427,6 +485,39 @@ function TasksBoardView() {
           void actions.remove(confirmDelete);
         }}
       />
+    </div>
+  );
+}
+
+/* ---------------- month view ---------------- */
+
+function MonthGrid({ days, month, today, showWeekend, loading, count, renderCell, onPickDay }: { days: ISODate[]; month: string; today: ISODate; showWeekend: boolean; loading: boolean; count: (d: ISODate) => number; renderCell: (d: ISODate) => React.ReactNode; onPickDay: (d: ISODate) => void }) {
+  const cols = showWeekend ? 7 : 5;
+  const shown = days.filter((d) => showWeekend || weekdayIndex(d) < 5);
+  return (
+    <div className="min-w-[840px]">
+      <div className="sticky top-0 z-10 grid border-b border-line bg-bg/90 backdrop-blur-sm" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+        {WEEKDAY_SHORT.slice(0, cols).map((w) => (
+          <div key={w} className="eyebrow px-2 py-2 text-[10px] text-ink-3">
+            {w}
+          </div>
+        ))}
+      </div>
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+        {shown.map((d) => {
+          const out = !d.startsWith(month);
+          const isToday = d === today;
+          return (
+            <section key={d} className={clsx('flex min-h-[132px] flex-col border-b border-r border-line', isToday && 'bg-surface/55', out && 'bg-surface-2/40')} aria-label={formatLongDay(d)}>
+              <button type="button" onClick={() => onPickDay(d)} title="Ver esta semana" className="flex items-baseline gap-1.5 px-2 pt-1.5 text-left">
+                <span className={clsx('font-display text-[20px] leading-none', out ? 'text-ink-3' : 'text-ink', isToday && 'underline decoration-2 underline-offset-4')}>{dayOfMonth(d)}</span>
+                {count(d) > 0 && <span className="tabular text-[10.5px] text-ink-3">{count(d)}</span>}
+              </button>
+              <div className="scroll-thin max-h-[260px] min-h-0 flex-1 overflow-y-auto px-1 pb-1.5">{loading ? <Skeleton /> : renderCell(d)}</div>
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }

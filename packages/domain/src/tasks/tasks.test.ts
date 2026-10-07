@@ -125,3 +125,16 @@ describe('filters and counts', () => {
     expect(g.get('none')!.map((t) => t.id)).toEqual(['n']);
   });
 });
+
+import { addMonths, formatMonth, monthGridDays } from '../dates';
+describe('month view dates', () => {
+  it('builds whole weeks for a month and moves by months', () => {
+    const g = monthGridDays('2026-10-07');
+    expect(g[0]).toBe('2026-09-28');
+    expect(g.length % 7).toBe(0);
+    expect(g[g.length - 1]).toBe('2026-11-01');
+    expect(addMonths('2026-01-31', 1)).toBe('2026-02-28');
+    expect(addMonths('2026-01-15', -1)).toBe('2025-12-15');
+    expect(formatMonth('2026-10-07')).toBe('Octubre 2026');
+  });
+});

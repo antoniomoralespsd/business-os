@@ -39,7 +39,7 @@ export function FileLink({ item }: { item: InboxItem }) {
 const NEW = '__new';
 
 /** Full editor for one file: every field can be corrected before confirming. */
-export function ProposalCard({ item, onDone }: { item: InboxItem; onDone?: () => void }) {
+export function ProposalCard({ item, onDone, onRemove }: { item: InboxItem; onDone?: () => void; onRemove?: () => void }) {
   const p = item.proposal;
   const { data: clients } = useClients();
   const { data: subs } = useSubscriptions();
@@ -222,6 +222,11 @@ export function ProposalCard({ item, onDone }: { item: InboxItem; onDone?: () =>
             <span className="mr-auto text-[12.5px] text-ink-3">
               {kind === 'expense' ? 'Gasto' : 'Ingreso'} de <strong className="tabular text-ink">{formatEUR(rect ? -total : total)}</strong>
             </span>
+          )}
+          {onRemove && (
+            <Button variant="ghost" onClick={onRemove}>
+              Quitar del Inbox
+            </Button>
           )}
           <Button variant="ghost" onClick={() => act('inbox.discard', { id: item.id }, 'Descartado')}>
             Descartar

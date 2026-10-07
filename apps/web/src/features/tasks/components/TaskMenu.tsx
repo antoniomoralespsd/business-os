@@ -1,6 +1,6 @@
 'use client';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { Archive, CalendarArrowUp, CalendarClock, CalendarOff, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { Archive, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Task, TaskStatus } from '@bos/schemas';
 import { QUICK_STATUS_ACTIONS } from '@bos/domain';
@@ -50,18 +50,6 @@ export function TaskMenu({ task, h, trigger }: { task: Task; h: TaskMenuHandlers
           onClick={(e) => e.stopPropagation()}
           className="z-50 min-w-[210px] rounded-[10px] border border-line bg-surface p-1 shadow-[var(--shadow-pop)]"
         >
-          <Item onSelect={h.onMoveToday}>
-            <CalendarArrowUp size={14} /> Mover a hoy
-          </Item>
-          <Item onSelect={h.onMoveTomorrow}>
-            <CalendarClock size={14} /> Mover a mañana
-          </Item>
-          {task.dueDate !== null && (
-            <Item onSelect={h.onUnschedule}>
-              <CalendarOff size={14} /> Quitar fecha
-            </Item>
-          )}
-          <DropdownMenu.Separator className="my-1 h-px bg-line" />
           {QUICK_STATUS_ACTIONS.filter((a) => a.status !== task.status).map((a) => (
             <Item key={a.status} onSelect={() => h.onStatus(a.status)}>
               <StatusIcon status={a.status} size={13} /> {a.label}

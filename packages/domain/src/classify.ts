@@ -172,13 +172,23 @@ export function findTotal(text: string): Guess<number> {
   const candidates: number[] = [];
   lines.forEach((line, i) => {
     const n = norm(line);
-    if (/\b(total|importe total|total factura|total a pagar|a pagar|amount due|grand total)\b/.test(n) && !/\b(sub\s?total|base|total iva|total impuestos)\b/.test(n)) {
+    if (/\b(total|importe total|total factura|total a pagar|a pagar|amount due|grand total)\b/.test(n) && !/\b(sub\s?total|base|total iva|total impuestos)\b|precio total|precio unitario|cantidad|descripcion/.test(n)) {
       const here = amountsIn(line);
       const next = here.length ? here : amountsIn(lines[i + 1] ?? '');
       if (next.length) candidates.push(next[next.length - 1]!);
     }
   });
   if (candidates.length) return guess(Math.max(...candidates), 0.85, 'Línea de total');
+  // "Retención IRPF (15%) -18,00 €" followed by a line with only "127,20 €".
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/irpf|retencion|cuota de iva|\biva\b/.test(norm(lines[i]!)) && !/irpf|retencion|iva/.test(norm(lines[i + 1]!))) {
+      const only = lines[i + 1]!.trim().match(/^-?\d{1,3}(?:[.\s]\d{3})*,\d{2}\s*€?$|^€\s?-?\d{1,3}(?:[.\s]\d{3})*,\d{2}$/);
+      if (only) {
+        const v = amountsIn(lines[i + 1]!.replace('€', ' €'));
+        if (v.length) return guess(v[v.length - 1]!, 0.85, 'Total tras los impuestos');
+      }
+    }
+  }
   const all = lines.filter((l) => /€|eur/i.test(l)).flatMap(amountsIn);
   if (all.length) return guess(Math.max(...all), 0.5, 'Mayor importe en euros del documento');
   return none('No se encontró ningún importe');
@@ -214,7 +224,16 @@ export function findIrpf(text: string): Guess<number> {
 }
 
 export function findInvoiceNumber(text: string): Guess<string> {
-  const m = text.match(/(?:n[º°o.]\s*(?:de\s+)?factura|factura\s*(?:n[º°o.]|num(?:ero)?\.?|#)|n[uú]mero\s+de\s+factura|invoice\s*(?:number|no\.?|#))\s*[:#]?\s*([A-Z0-9][A-Z0-9/\-_.]{2,30})/i);
+  // Layouts where the label sits in a header row and the value is the last thing on the next row:
+  // "A la atención de   N.º de factura" / "CLIENTE SL   495".
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/n\.?\s*[º°o]\.?\s*(?:de\s+)?factura\s*$/i.test(lines[i]!.trim())) {
+      const m = lines[i + 1]!.trim().match(/([A-Z]{0,4}[-/]?\d{1,6}(?:[-/]\d{1,6})?)$/i);
+      if (m) return guess(m[1]!, 0.85, 'Número de factura indicado');
+    }
+  }
+  const m = text.match(/(?:n\.?\s*[º°o]\.?\s*(?:de\s+)?factura|n[º°o.]\s*(?:de\s+)?factura|factura\s*(?:n[º°o.]|num(?:ero)?\.?|#)|n[uú]mero\s+de\s+factura|invoice\s*(?:number|no\.?|#))\s*[:#]?\s*([A-Z0-9][A-Z0-9/\-_.]{2,30})/i);
   return m ? guess(m[1]!.replace(/[.,]$/, ''), 0.8, 'Número de factura indicado') : none();
 }
 
@@ -224,9 +243,15 @@ const NOT_A_NAME = /cif|nif|dni|n\.i\.f|c\.i\.f|calle|c\/|avda|avinguda|avenida|
 /** Name of the other party (the client on your invoices, the vendor on received ones). */
 export function findCounterparty(text: string, taxId: string | null): Guess<string> {
   const lines = text.split(/\r?\n/).map((l) => l.trim());
+  const clean = (l: string) => l.replace(/\s+-?\d+(?:[.,]\d+)?\s*€?$/, '').replace(/\s{2,}/g, ' ').trim();
+  const attn = lines.findIndex((l) => /a la atenci[oó]n de/i.test(l));
+  if (attn >= 0 && lines[attn + 1]) {
+    const v = clean(lines[attn + 1]!);
+    if (v.length >= 2 && !NOT_A_NAME.test(v)) return guess(v, 0.85, 'Indicado «A la atención de»');
+  }
   const labelled = text.match(/(?:cliente|facturar a|datos del cliente|bill to|destinatario|receptor)\s*:?\s*\n?\s*([^\n]{3,80})/i);
   if (labelled) {
-    const v = labelled[1]!.replace(/\s{2,}/g, ' ').trim();
+    const v = clean(labelled[1]!);
     if (v && !NOT_A_NAME.test(v)) return guess(v, 0.8, 'Indicado como cliente');
   }
   if (taxId) {
@@ -236,7 +261,7 @@ export function findCounterparty(text: string, taxId: string | null): Guess<stri
       const sameLine = lines[at]!.replace(/(?:CIF|NIF|DNI|N\.I\.F\.?|C\.I\.F\.?)\s*:?\s*\S+/gi, '').replace(/[\s,;:·-]+$/, '').trim();
       for (const i of window) {
         const l = i === at ? sameLine : lines[i]!;
-        if (l.length >= 3 && l.length <= 80 && LEGAL_FORM.test(norm(l))) return guess(l.replace(/\s{2,}/g, ' '), 0.85, 'Razón social junto al NIF');
+        if (l.length >= 3 && l.length <= 80 && LEGAL_FORM.test(norm(clean(l)))) return guess(clean(l), 0.85, 'Razón social junto al NIF');
       }
       for (const i of window) {
         const l = i === at ? sameLine : lines[i]!;
@@ -265,8 +290,12 @@ export function monthInName(filename: string, hints: Pick<PathHints, 'year' | 'm
 
 function invoiceNumber(text: string, filename: string): Guess<string> {
   const found = findInvoiceNumber(text);
-  if (found.value) return found;
   const stem = filename.replace(/\.[a-z0-9]+$/i, '').trim();
+  // "0528 Otto JUNIO …", "FR0031 Obvio …": your own naming puts the number first (with its zeros).
+  const lead = stem.match(/^((?:FR|R|F)?[-\s]?\d{3,6})(?=[\s_]|-(?!\d))/i)?.[1]?.replace(/\s/g, '');
+  const digits = (x: string) => Number(x.replace(/\D/g, ''));
+  if (lead && (!found.value || digits(found.value) === digits(lead))) return guess(lead, found.value ? 0.95 : 0.85, 'Número al principio del nombre');
+  if (found.value) return found;
   if (MONTH_IN_NAME.test(norm(stem.replace(/[_-]+/g, ' ')))) return found;
   // "F2026-011", "Factura 34", "2026_015 City Hall" → use the file name when it carries a number.
   const m = stem.match(/(?:factura|fra\.?|fact\.?)?\s*([A-Z]{0,4}[-_ ]?\d{1,4}(?:[-_/]\d{1,5})?)/i);
@@ -364,7 +393,11 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
   const dates = findDates(text);
   const fileDates = findDates(input.filename.replace(/[_]/g, '-'));
   const nameMonth = monthInName(input.filename, hints);
+  const allLines = text.split(/\r?\n/);
+  const labelIdx = allLines.findIndex((l) => /\bfecha\b/i.test(l) && !findDates(l).length);
+  const belowLabel = labelIdx >= 0 ? findDates(allLines[labelIdx + 1] ?? '') : [];
   if (fechaLine) date = guess(findDates(fechaLine)[0]!, 0.9, 'Línea de fecha');
+  else if (belowLabel.length) date = guess(belowLabel[0]!, 0.9, 'Fecha bajo su etiqueta');
   else if (dates.length) date = guess(dates[0]!, 0.7, 'Primera fecha del documento');
   else if (fileDates.length) date = guess(fileDates[0]!, 0.6, 'Fecha en el nombre del archivo');
   else if (nameMonth) date = guess(`${nameMonth.year}-${pad(nameMonth.month)}-01`, 0.5, 'Mes en el nombre del archivo');

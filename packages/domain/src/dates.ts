@@ -77,3 +77,28 @@ export function formatLongDay(d: ISODate): string {
 export function daysBetween(a: ISODate, b: ISODate): number {
   return Math.round((parseISODate(b).getTime() - parseISODate(a).getTime()) / 86_400_000);
 }
+
+/** Same day-of-month n months away (clamped): 2026-01-31 +1 → 2026-02-28. */
+export function addMonths(d: ISODate, n: number): ISODate {
+  const [y, m, day] = d.split('-').map(Number) as [number, number, number];
+  const total = y * 12 + (m - 1) + n;
+  const ny = Math.floor(total / 12);
+  const nm = (total % 12) + 1;
+  const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+  return `${ny}-${String(nm).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`;
+}
+
+/** Whole weeks (Mon–Sun) covering the month of `d`: 5 or 6 rows of 7 days. */
+export function monthGridDays(d: ISODate): ISODate[] {
+  const first = `${d.slice(0, 7)}-01`;
+  const last = addDays(addMonths(first, 1), -1);
+  const out: ISODate[] = [];
+  for (let day = startOfWeek(first); day <= last || out.length % 7 !== 0; day = addDays(day, 1)) out.push(day);
+  return out;
+}
+
+/** "Octubre 2026". */
+export function formatMonth(d: ISODate): string {
+  const name = MONTHS[Number(d.slice(5, 7)) - 1] ?? '';
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} ${d.slice(0, 4)}`;
+}

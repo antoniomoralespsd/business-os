@@ -1,24 +1,24 @@
 'use client';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
-import type { Client, InboxItem, IssuerSettings, Subscription } from '@bos/schemas';
+import type { Client, DriveLayout, DriveRef, InboxItem, IssuerSettings, Subscription } from '@bos/schemas';
 import { classifyDocument, todayISO } from '@bos/domain';
 import { useGoogleSettings } from '@/data/hooks';
 import { callAction } from '@/lib/actionsClient';
 import { DATA_MODE } from '@/lib/config';
-import { billingFolder, connectDrive, DISCARDED_FOLDER, DriveAuthNeeded, hasToken, INBOX_FOLDER, moveInDrive, onDriveTokens, uploadToDrive, warmUpDrive } from '@/lib/drive';
+import { billingFolderId, connectDrive, download, DriveAuthNeeded, hasToken, inboxFolderId, moveTo, onDriveTokens, uploadTo, walk, warmUpDrive } from '@/lib/drive';
 import { documentText, extOf, sha256 } from '@/lib/fileTools';
 import { verdictFor, type PickedFile } from '@/lib/folderFiles';
 
 /* ---------- Drive state ---------- */
 
-/** The account where invoices are stored, and whether this tab has a valid token for it. */
+/** The account where invoices are stored, your agency folder, and whether this tab has a valid token. */
 export function useDrive() {
   const google = useGoogleSettings();
   const account = google?.billingAccount ?? null;
   useEffect(() => warmUpDrive(), []);
-  const tick = useSyncExternalStore(onDriveTokens, () => (account ? hasToken(account) : false), () => false);
-  return { enabled: DATA_MODE === 'firestore', settings: google, account, ready: tick };
+  const ready = useSyncExternalStore(onDriveTokens, () => (account ? hasToken(account) : false), () => false);
+  return { enabled: DATA_MODE === 'firestore', settings: google, account, layout: google?.layout ?? null, ready };
 }
 
 /** Connects (popup) and registers the account. Must run from a click. */
@@ -36,9 +36,17 @@ export async function connectAndRegister(hint?: string): Promise<string | null> 
   }
 }
 
+/** Makes sure there's a token for the account; opens the popup if not (call from a click). */
+export async function ensureDrive(account: string | null): Promise<boolean> {
+  if (!account) return false;
+  if (hasToken(account)) return true;
+  return !!(await connectAndRegister(account));
+}
+
 /* ---------- batch processing ---------- */
 
 export type BatchState = {
+  label: string;
   total: number;
   done: number;
   created: number;
@@ -47,19 +55,21 @@ export type BatchState = {
   unsupported: number;
   savedToDrive: number;
   reread: number;
-  waitingDrive: number;
+  linked: number;
   errors: { name: string; message: string }[];
   running: boolean;
 };
-const EMPTY: BatchState = { total: 0, done: 0, created: 0, already: 0, archives: 0, unsupported: 0, savedToDrive: 0, reread: 0, waitingDrive: 0, errors: [], running: false };
+const EMPTY: BatchState = { label: '', total: 0, done: 0, created: 0, already: 0, archives: 0, unsupported: 0, savedToDrive: 0, reread: 0, linked: 0, errors: [], running: false };
 
 type Ctx = { items: InboxItem[] | null; clients: Client[] | null; subs: Subscription[] | null; issuer: IssuerSettings | null };
 
-async function pool<T>(list: T[], n: number, fn: (x: T) => Promise<void>) {
+export async function pool<T>(list: T[], n: number, fn: (x: T) => Promise<void>) {
   let i = 0;
-  await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => {
-    while (i < list.length) await fn(list[i++]!);
-  }));
+  await Promise.all(
+    Array.from({ length: Math.min(n, list.length) }, async () => {
+      while (i < list.length) await fn(list[i++]!);
+    }),
+  );
 }
 
 export function classifyCtx(c: Ctx) {
@@ -71,154 +81,223 @@ export function classifyCtx(c: Ctx) {
   };
 }
 
+/** Where a confirmed file goes and with which name. Income and files already in your Drive keep their name. */
+async function targetFor(account: string, layout: DriveLayout | null, it: InboxItem) {
+  if (it.status === 'discarded') return { folder: await inboxFolderId(account, layout, true), name: undefined };
+  const f = it.filedAs!;
+  const folder = await billingFolderId(account, layout, f.date, f.kind, f.rectificativa);
+  const keep = it.drive?.keepName || f.kind === 'income';
+  return { folder, name: keep ? undefined : f.name };
+}
+
 export function useInboxPipeline(ctx: Ctx) {
-  const { enabled, account } = useDrive();
+  const { enabled, account, layout } = useDrive();
   const [batch, setBatch] = useState<BatchState>(EMPTY);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
-  const accountRef = useRef(account);
-  accountRef.current = account;
+  const accRef = useRef({ account, layout });
+  accRef.current = { account, layout };
   /** Files read in this tab that still need to reach Drive (lost on reload; re-dropping them fixes it). */
   const waiting = useRef(new Map<string, File>());
   const [waitingCount, setWaitingCount] = useState(0);
   const syncing = useRef(new Set<string>());
-  const [syncTick, setSyncTick] = useState(0);
 
   const bump = (p: Partial<BatchState> | ((b: BatchState) => Partial<BatchState>)) => setBatch((b) => ({ ...b, ...(typeof p === 'function' ? p(b) : p) }));
+  const setWaiting = () => setWaitingCount(waiting.current.size);
 
-  const saveOne = useCallback(async (id: string, file: File, target: { name: string; path: string[] } | null) => {
-    const acc = accountRef.current;
-    if (!enabled || !acc || !hasToken(acc)) {
-      waiting.current.set(id, file);
-      setWaitingCount(waiting.current.size);
-      return false;
-    }
-    try {
-      const ref = await uploadToDrive(acc, file, target?.name ?? file.name, target?.path ?? INBOX_FOLDER);
-      await callAction('inbox.attachDrive', { id, drive: ref });
-      waiting.current.delete(id);
-      setWaitingCount(waiting.current.size);
-      return true;
-    } catch (e) {
-      waiting.current.set(id, file);
-      setWaitingCount(waiting.current.size);
-      if (!(e instanceof DriveAuthNeeded)) throw e;
-      return false;
-    }
-  }, [enabled]);
+  /** Uploads a file to the "pending" folder (or straight to its final folder if already confirmed). */
+  const saveOne = useCallback(
+    async (id: string, file: File, item?: InboxItem) => {
+      const { account: acc, layout: lay } = accRef.current;
+      if (!enabled || !acc || !hasToken(acc)) {
+        waiting.current.set(id, file);
+        setWaiting();
+        return false;
+      }
+      try {
+        let ref: DriveRef;
+        if (item?.status === 'completed' && item.filedAs) {
+          const t = await targetFor(acc, lay, item);
+          ref = { ...(await uploadTo(acc, file, t.name ?? file.name, t.folder)), filed: true };
+        } else ref = await uploadTo(acc, file, file.name, await inboxFolderId(acc, lay));
+        await callAction('inbox.attachDrive', { id, drive: ref });
+        waiting.current.delete(id);
+        setWaiting();
+        return true;
+      } catch (e) {
+        waiting.current.set(id, file);
+        setWaiting();
+        if (!(e instanceof DriveAuthNeeded)) throw e;
+        return false;
+      }
+    },
+    [enabled],
+  );
 
+  /** Reads a file, proposes a classification and creates the Inbox item. */
+  const ingest = useCallback(async (file: File, path: string, hash: string): Promise<string> => {
+    const isPdf = file.type === 'application/pdf' || extOf(file.name) === 'pdf';
+    const { text } = await documentText(file);
+    const proposal = classifyDocument({ filename: file.name, mimeType: file.type, text, path }, classifyCtx(ctxRef.current));
+    const r = await callAction<{ id: string }>('inbox.create', {
+      filename: file.name.slice(0, 250),
+      mimeType: file.type || (isPdf ? 'application/pdf' : 'application/octet-stream'),
+      size: file.size,
+      sha256: hash,
+      storagePath: null,
+      sourcePath: path.slice(0, 500),
+      textExcerpt: text.slice(0, 20000),
+      proposal,
+    });
+    return r.id;
+  }, []);
+
+  /** Re-reads a pending item that never got text (photos uploaded before OCR existed). */
+  const reread = useCallback(async (existing: InboxItem, file: File, path: string) => {
+    if (existing.status !== 'needs_confirmation' || existing.textExcerpt.replace(/\s/g, '').length >= 30) return false;
+    const { text } = await documentText(file);
+    if (!text.trim()) return false;
+    const proposal = classifyDocument({ filename: existing.filename, mimeType: existing.mimeType, text, path: existing.sourcePath || path }, classifyCtx(ctxRef.current));
+    await callAction('inbox.updateProposals', { items: [{ id: existing.id, proposal, textExcerpt: text.slice(0, 4000) }] });
+    return true;
+  }, []);
+
+  /** Files dropped or picked from the computer. */
   const process = useCallback(
     async (picked: PickedFile[]) => {
       const docs = picked.filter((p) => verdictFor(p.file.name) === 'document');
       const archives = picked.filter((p) => verdictFor(p.file.name) === 'archive').length;
-      const unsupported = picked.length - docs.length - archives;
-      setBatch({ ...EMPTY, total: docs.length, archives, unsupported, running: true });
+      setBatch({ ...EMPTY, label: 'Leyendo', total: docs.length, archives, unsupported: picked.length - docs.length - archives, running: true });
       const bySha = new Map((ctxRef.current.items ?? []).map((i) => [i.sha256, i]));
       const seen = new Set<string>();
-
       await pool(docs, 3, async ({ file, path }) => {
         try {
           const hash = await sha256(file);
-          if (seen.has(hash)) {
-            bump((b) => ({ already: b.already + 1 }));
-            return;
-          }
+          if (seen.has(hash)) return bump((b) => ({ already: b.already + 1 }));
           seen.add(hash);
           const existing = bySha.get(hash);
           if (existing) {
-            // Already in the app: only make sure the file is in Drive.
-            if (!existing.drive) {
-              const target = existing.filedAs ? { name: existing.filedAs.name, path: billingFolder(existing.filedAs.date, existing.filedAs.kind, existing.filedAs.rectificativa) } : null;
-              if (await saveOne(existing.id, file, target)) bump((b) => ({ savedToDrive: b.savedToDrive + 1 }));
-            }
-            // Pending and never read (photos uploaded before OCR existed): read it now and re-propose.
-            if (existing.status === 'needs_confirmation' && existing.textExcerpt.replace(/\s/g, '').length < 30) {
-              const { text } = await documentText(file);
-              if (text.trim()) {
-                const proposal = classifyDocument({ filename: existing.filename, mimeType: existing.mimeType, text, path: existing.sourcePath || path }, classifyCtx(ctxRef.current));
-                await callAction('inbox.updateProposals', { items: [{ id: existing.id, proposal, textExcerpt: text.slice(0, 4000) }] });
-                bump((b) => ({ reread: b.reread + 1 }));
-              }
-            }
-            bump((b) => ({ already: b.already + 1 }));
-            return;
+            if (!existing.drive && (await saveOne(existing.id, file, existing))) bump((b) => ({ savedToDrive: b.savedToDrive + 1 }));
+            if (await reread(existing, file, path)) bump((b) => ({ reread: b.reread + 1 }));
+            return bump((b) => ({ already: b.already + 1 }));
           }
-          const isPdf = file.type === 'application/pdf' || extOf(file.name) === 'pdf';
-          const { text } = await documentText(file);
-          const proposal = classifyDocument({ filename: file.name, mimeType: file.type, text, path }, classifyCtx(ctxRef.current));
-          const r = await callAction<{ id: string }>('inbox.create', {
-            filename: file.name.slice(0, 250),
-            mimeType: file.type || (isPdf ? 'application/pdf' : 'application/octet-stream'),
-            size: file.size,
-            sha256: hash,
-            storagePath: null,
-            sourcePath: path.slice(0, 500),
-            textExcerpt: text.slice(0, 20000),
-            proposal,
-          });
+          const id = await ingest(file, path, hash);
           bump((b) => ({ created: b.created + 1 }));
-          if (enabled) {
-            if (await saveOne(r.id, file, null)) bump((b) => ({ savedToDrive: b.savedToDrive + 1 }));
-          }
+          if (enabled && (await saveOne(id, file))) bump((b) => ({ savedToDrive: b.savedToDrive + 1 }));
         } catch (e) {
           bump((b) => ({ errors: [...b.errors, { name: path, message: e instanceof Error ? e.message : 'Error' }] }));
         } finally {
           bump((b) => ({ done: b.done + 1 }));
         }
       });
-      bump({ running: false, waitingDrive: waiting.current.size });
+      bump({ running: false });
     },
-    [enabled, saveOne],
+    [enabled, saveOne, ingest, reread],
   );
 
-  /** Uploads what's waiting and files confirmed/discarded items into their folders. Call from a click if no token. */
+  /**
+   * Reads what's already in your Drive (00 - AÑOS/<year>) and registers it, without moving or renaming.
+   * Files also uploaded from the PC are matched by content and linked, not duplicated.
+   */
+  const importFromDrive = useCallback(
+    async (folder: { id: string; name: string }) => {
+      const { account: acc } = accRef.current;
+      if (!acc) return;
+      setBatch({ ...EMPTY, label: `Leyendo ${folder.name} en Drive`, running: true });
+      try {
+        const files = (await walk(acc, folder.id, folder.name)).filter((f) => verdictFor(f.name) === 'document');
+        const items = ctxRef.current.items ?? [];
+        const known = new Set(items.map((i) => i.drive?.fileId).filter(Boolean));
+        const todo = files.filter((f) => !known.has(f.id));
+        bump({ total: todo.length, already: files.length - todo.length });
+        const bySha = new Map(items.map((i) => [i.sha256, i]));
+        await pool(todo, 3, async (f) => {
+          try {
+            const blob = await download(acc, f.id);
+            const file = new File([blob], f.name, { type: f.mimeType });
+            const hash = await sha256(file);
+            const ref: DriveRef = { account: acc, fileId: f.id, name: f.name, folder: f.path.split('/').slice(0, -1).join('/'), folderId: f.parents?.[0] ?? '', webViewLink: f.webViewLink ?? `https://drive.google.com/file/d/${f.id}/view`, filed: false, keepName: true };
+            const existing = bySha.get(hash);
+            if (existing) {
+              await callAction('inbox.attachDrive', { id: existing.id, drive: { ...ref, filed: existing.status !== 'needs_confirmation' ? false : ref.filed } });
+              if (await reread(existing, file, f.path)) bump((b) => ({ reread: b.reread + 1 }));
+              bump((b) => ({ linked: b.linked + 1 }));
+              return;
+            }
+            const id = await ingest(file, f.path, hash);
+            bySha.set(hash, { id } as InboxItem);
+            await callAction('inbox.attachDrive', { id, drive: ref });
+            bump((b) => ({ created: b.created + 1 }));
+          } catch (e) {
+            if (e instanceof DriveAuthNeeded) throw e;
+            bump((b) => ({ errors: [...b.errors, { name: f.path, message: e instanceof Error ? e.message : 'Error' }] }));
+          } finally {
+            bump((b) => ({ done: b.done + 1 }));
+          }
+        });
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Error leyendo Drive');
+      }
+      bump({ running: false });
+    },
+    [ingest, reread],
+  );
+
+  /** Uploads what's waiting and files confirmed/discarded items into their folders. */
   const syncDrive = useCallback(
     async (interactive: boolean) => {
-      const acc = accountRef.current;
+      const { account: acc, layout: lay } = accRef.current;
       if (!enabled || !acc) return;
       if (!hasToken(acc)) {
-        if (!interactive) return;
-        if (!(await connectAndRegister(acc))) return;
+        if (!interactive || !(await connectAndRegister(acc))) return;
       }
       const items = ctxRef.current.items ?? [];
       let moved = 0;
       let uploaded = 0;
       try {
-        for (const [id, file] of [...waiting.current]) {
-          const it = items.find((i) => i.id === id);
-          const target = it?.filedAs ? { name: it.filedAs.name, path: billingFolder(it.filedAs.date, it.filedAs.kind, it.filedAs.rectificativa) } : null;
-          if (await saveOne(id, file, target)) uploaded++;
-        }
-        for (const it of items) {
-          if (!it.drive || syncing.current.has(it.id) || it.drive.account !== acc) continue;
-          const inInbox = it.drive.folder.endsWith('/Inbox');
-          let target: { name: string; path: string[] } | null = null;
-          if (it.status === 'completed' && it.filedAs && inInbox) target = { name: it.filedAs.name, path: billingFolder(it.filedAs.date, it.filedAs.kind, it.filedAs.rectificativa) };
-          if (it.status === 'discarded' && inInbox) target = { name: it.filename, path: DISCARDED_FOLDER };
-          if (!target) continue;
+        for (const [id, file] of [...waiting.current]) if (await saveOne(id, file, items.find((i) => i.id === id))) uploaded++;
+        const todo = items.filter((it) => it.drive && !it.drive.filed && it.drive.account === acc && !syncing.current.has(it.id) && ((it.status === 'completed' && it.filedAs) || it.status === 'discarded'));
+        await pool(todo, 3, async (it) => {
           syncing.current.add(it.id);
           try {
-            const ref = await moveInDrive(it.drive, target.name, target.path);
-            await callAction('inbox.attachDrive', { id: it.id, drive: ref });
+            const t = await targetFor(acc, lay, it);
+            const ref = await moveTo(it.drive!, t.folder, t.name);
+            await callAction('inbox.attachDrive', { id: it.id, drive: { ...ref, filed: true } });
             moved++;
           } finally {
             syncing.current.delete(it.id);
           }
-        }
+        });
       } catch (e) {
         if (!(e instanceof DriveAuthNeeded)) toast.error(e instanceof Error ? e.message : 'Error con Google Drive');
       }
-      if (interactive && (moved || uploaded)) toast(`Drive al día: ${uploaded ? `${uploaded} subidos` : ''}${uploaded && moved ? ' · ' : ''}${moved ? `${moved} ordenados` : ''}`);
-      setSyncTick((t) => t + 1);
+      if (interactive && (moved || uploaded)) toast(`Drive al día: ${[uploaded && `${uploaded} subidos`, moved && `${moved} ordenados`].filter(Boolean).join(' · ')}`);
     },
     [enabled, saveOne],
   );
 
-  // Whenever items change (a confirm, a discard) and we have a token, file things quietly.
-  const pendingMoves = (ctx.items ?? []).filter((i) => i.drive && i.drive.account === account && i.drive.folder.endsWith('/Inbox') && i.status !== 'needs_confirmation').length;
+  // Whenever something gets confirmed or discarded and we have a token, file it quietly.
+  const pendingMoves = (ctx.items ?? []).filter((i) => i.drive && !i.drive.filed && i.drive.account === account && (i.status === 'discarded' || (i.status === 'completed' && i.filedAs))).length;
   useEffect(() => {
     if (pendingMoves && account && hasToken(account)) void syncDrive(false);
   }, [pendingMoves, account, syncDrive]);
 
-  return { batch, process, syncDrive, waitingCount, pendingMoves, syncTick, clearBatch: () => setBatch(EMPTY) };
+  /** Removes pending/discarded items; their Drive copies (if any) go to "Descartados", never to the bin. */
+  const removeItems = useCallback(async (list: InboxItem[]) => {
+    const { account: acc, layout: lay } = accRef.current;
+    const withDrive = list.filter((i) => i.drive && !i.drive.keepName);
+    if (withDrive.length && acc && hasToken(acc)) {
+      const folder = await inboxFolderId(acc, lay, true);
+      await pool(withDrive, 3, async (i) => {
+        await moveTo(i.drive!, folder).catch(() => undefined);
+      });
+    }
+    for (const i of list) waiting.current.delete(i.id);
+    setWaiting();
+    let removed = 0;
+    for (let k = 0; k < list.length; k += 400) removed += (await callAction<{ removed: number }>('inbox.remove', { ids: list.slice(k, k + 400).map((i) => i.id) })).removed;
+    return removed;
+  }, []);
+
+  return { batch, process, importFromDrive, syncDrive, removeItems, waitingCount, pendingMoves, clearBatch: () => setBatch(EMPTY) };
 }

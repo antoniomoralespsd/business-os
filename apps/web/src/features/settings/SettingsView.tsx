@@ -10,8 +10,8 @@ import { act, useIssuer, useVaultEntries, useVaultMeta } from '@/data/hooks';
 import { readPort } from '@/data/read';
 import { useVaultKey } from '@/features/clients/modules/VaultModule';
 import { DATA_MODE } from '@/lib/config';
-import { forgetDrive, hasToken } from '@/lib/drive';
-import { connectAndRegister, useDrive } from '@/features/inbox/pipeline';
+import { detectLayout, forgetDrive, hasToken, listChildren } from '@/lib/drive';
+import { connectAndRegister, ensureDrive, useDrive } from '@/features/inbox/pipeline';
 import { downloadText } from '@/lib/format';
 import { setThemePref, useThemePref, type ThemePref } from '@/lib/theme';
 import { createVault, decryptText, encryptText, setVaultKey, unlockVault } from '@/lib/vault';
@@ -259,7 +259,7 @@ function AccountsSection() {
     );
   const accounts = drive.settings?.accounts ?? [];
   return (
-    <Section title="Cuentas de Google" description="Cada archivo que confirmas en el Inbox se guarda en el Drive elegido, en «Business OS / Facturación / año / mes / Ingresos o Gastos». La app solo ve lo que ella misma crea.">
+    <Section title="Cuentas de Google" description="Cada archivo que confirmas se guarda en tu carpeta de la agencia: 00 - AÑOS / año / mes / INGRESOS o GASTOS. La app nunca borra nada: lo descartado se mueve a «05 - PENDIENTE DE CLASIFICAR / Descartados».">
       {!drive.settings ? (
         <Loading rows={2} />
       ) : (
@@ -310,16 +310,91 @@ function AccountsSection() {
             </Button>
             <p className="text-[11.5px] text-ink-3">Por seguridad, Google da permiso por una hora: cuando caduca, la app te pide reconectar con un clic.</p>
           </div>
+          {drive.account && <AgencyFolder />}
           <p className="text-[11.5px] leading-relaxed text-ink-3">
-            Si al guardar aparece «La API de Google Drive no está activada», actívala una vez aquí:{' '}
+            La primera vez, activa en Google Cloud (con la cuenta antoniomorales.psd) estas dos APIs:{' '}
             <a className="font-semibold underline" href="https://console.cloud.google.com/apis/library/drive.googleapis.com?project=bussiness-os" target="_blank" rel="noreferrer">
-              Google Cloud → Google Drive API → Habilitar
+              Google Drive API
+            </a>{' '}
+            y{' '}
+            <a className="font-semibold underline" href="https://console.cloud.google.com/apis/library/sheets.googleapis.com?project=bussiness-os" target="_blank" rel="noreferrer">
+              Google Sheets API
             </a>
-            .
+            . Google avisará de que la app «no está verificada»: es normal, es tuya (Configuración avanzada → Ir a…).
           </p>
         </div>
       )}
     </Section>
+  );
+}
+
+/** Picks the agency folder in Drive and detects 00 años / 01 facturas / 02 albaranes / 03 rectificativas. */
+function AgencyFolder() {
+  const drive = useDrive();
+  const [options, setOptions] = useState<{ id: string; name: string }[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const layout = drive.layout;
+  const browse = async () => {
+    if (!(await ensureDrive(drive.account))) return;
+    setBusy(true);
+    try {
+      const kids = await listChildren(drive.account!, 'root', true);
+      setOptions(kids.map((k) => ({ id: k.id, name: k.name })));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo leer Drive');
+    }
+    setBusy(false);
+  };
+  const choose = async (f: { id: string; name: string }) => {
+    setBusy(true);
+    try {
+      const l = await detectLayout(drive.account!, f);
+      await act('settings.google', { layout: l }, `Carpeta de la agencia: ${f.name}`);
+      setOptions(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo leer la carpeta');
+    }
+    setBusy(false);
+  };
+  const row = (label: string, id: string | null | undefined, hint: string) => (
+    <li className="flex items-center gap-3 px-4 py-2 text-[12.5px]">
+      <span className={id ? 'text-ok' : 'text-ink-3'}>{id ? '✓' : '—'}</span>
+      <span className="font-medium">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-ink-3">{id ? hint : 'no encontrada: se creará al usarla'}</span>
+    </li>
+  );
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
+        <HardDrive size={15} className="text-ink-3" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-medium">Carpeta de la agencia</p>
+          <p className="truncate text-[11.5px] text-ink-3">{layout ? layout.rootName : 'Elige la carpeta de tu Drive donde están 00 - AÑOS, 01 - FACTURAS…'}</p>
+        </div>
+        <Button size="sm" loading={busy && !options} onClick={() => void browse()}>
+          {layout ? 'Cambiar' : 'Elegir carpeta'}
+        </Button>
+      </div>
+      {options && (
+        <ul className="max-h-[260px] divide-y divide-line overflow-auto">
+          {options.map((o) => (
+            <li key={o.id}>
+              <button type="button" disabled={busy} className="w-full px-4 py-2 text-left text-[13px] hover:bg-surface-2" onClick={() => void choose(o)}>
+                {o.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {layout && !options && (
+        <ul className="divide-y divide-line">
+          {row('00 - AÑOS', layout.yearsId, 'PDF de facturas y gastos por año y mes')}
+          {row('01 - FACTURAS', layout.editablesId, 'hojas editables de facturas')}
+          {row('02 - ALBARANES', layout.albaranesId, 'hojas de albaranes')}
+          {row('03 - RECTIFICATIVAS', layout.rectificativasId, 'hojas de rectificativas')}
+        </ul>
+      )}
+    </Card>
   );
 }
 

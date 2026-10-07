@@ -1,19 +1,20 @@
 'use client';
 import clsx from 'clsx';
-import { AlertTriangle, ChevronDown, CloudOff, FolderUp, HardDrive, RefreshCw, UploadCloud, Wand2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, CloudOff, FolderInput, FolderUp, HardDrive, RefreshCw, Trash2, UploadCloud, Wand2, X } from 'lucide-react';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { Client, InboxItem } from '@bos/schemas';
 import { classifyDocument, formatEUR, todayISO } from '@bos/domain';
 import { Badge, Button, Card, EmptyState, Loading, PageHeader, Segmented, Select, Toggle } from '@/components/ui/kit';
-import { useClientMap, useClients, useInbox, useIssuer, useSubscriptions } from '@/data/hooks';
+import { act, useClientMap, useClients, useInbox, useIssuer, useSubscriptions } from '@/data/hooks';
 import { callAction } from '@/lib/actionsClient';
-import { hasToken } from '@/lib/drive';
+import { driveUrl, FOLDER_MIME, hasToken, listChildren } from '@/lib/drive';
 import { filesFromDrop, filesFromInput, type PickedFile } from '@/lib/folderFiles';
 import { shortDate } from '@/lib/format';
 import { confidenceOf, draftFrom, groupPending, looksPaid, type ConfirmInput, type Group, type Override } from './drafts';
-import { classifyCtx, connectAndRegister, useDrive, useInboxPipeline, type BatchState } from './pipeline';
+import { classifyCtx, connectAndRegister, ensureDrive, useDrive, useInboxPipeline, type BatchState } from './pipeline';
 import { Conf, FileIcon, FileLink, ProposalCard } from './ProposalCard';
 
 type View = 'all' | 'income' | 'expense' | 'other';
@@ -30,6 +31,7 @@ export function InboxView() {
   const [drag, setDrag] = useState(false);
   const [view, setView] = useState<View>('all');
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
   const filesRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
   const today = todayISO();
@@ -168,6 +170,7 @@ export function InboxView() {
           />
         </div>
 
+        <DriveImport onImport={(f) => void pipe.importFromDrive(f)} busy={pipe.batch.running} />
         <BatchProgress b={pipe.batch} onClose={pipe.clearBatch} />
       </div>
 
@@ -191,6 +194,11 @@ export function InboxView() {
             {pending.length > 0 && (
               <Button size="sm" variant="ghost" icon={<RefreshCw size={13} />} onClick={() => void reclassify()}>
                 Volver a clasificar
+              </Button>
+            )}
+            {pending.length > 0 && (
+              <Button size="sm" variant="ghost" icon={<Trash2 size={13} />} onClick={() => setConfirmClear(true)}>
+                Quitar todo lo pendiente
               </Button>
             )}
             {ready.length > 0 && (
@@ -217,7 +225,7 @@ export function InboxView() {
                 <section className="space-y-3">
                   <p className="eyebrow text-ink-3">Ingresos · por cliente</p>
                   {groups.income.map((g) => (
-                    <GroupCard key={g.key} group={g} kind="income" clients={clients ?? []} byId={byId} today={today} onConfirm={confirmMany} busy={!!bulk} />
+                    <GroupCard key={g.key} group={g} kind="income" clients={clients ?? []} byId={byId} today={today} onConfirm={confirmMany} onRemove={pipe.removeItems} busy={!!bulk} />
                   ))}
                 </section>
               )}
@@ -225,7 +233,7 @@ export function InboxView() {
                 <section className="space-y-3">
                   <p className="eyebrow text-ink-3">Gastos · por mes</p>
                   {groups.expense.map((g) => (
-                    <GroupCard key={g.key} group={g} kind="expense" clients={clients ?? []} byId={byId} today={today} onConfirm={confirmMany} busy={!!bulk} />
+                    <GroupCard key={g.key} group={g} kind="expense" clients={clients ?? []} byId={byId} today={today} onConfirm={confirmMany} onRemove={pipe.removeItems} busy={!!bulk} />
                   ))}
                 </section>
               )}
@@ -233,7 +241,7 @@ export function InboxView() {
                 <section className="space-y-3">
                   <p className="eyebrow text-ink-3">Otros documentos</p>
                   {groups.other.map((i) => (
-                    <ProposalCard key={i.id} item={i} />
+                    <ProposalCard key={i.id} item={i} onRemove={() => void pipe.removeItems([i])} />
                   ))}
                 </section>
               )}
@@ -241,6 +249,19 @@ export function InboxView() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmClear}
+        title={`¿Quitar los ${pending.length} archivos pendientes?`}
+        description="Se quitan del Inbox sin crear nada en Facturación. Tus archivos del ordenador no se tocan; las copias que la app subió a Drive van a «Descartados». Puedes volver a subirlos cuando quieras."
+        confirmLabel="Quitar"
+        danger
+        onOpenChange={setConfirmClear}
+        onConfirm={() => {
+          setConfirmClear(false);
+          void pipe.removeItems(pending).then((n) => toast(`${n} archivos quitados del Inbox`));
+        }}
+      />
 
       {done.length > 0 && (
         <div className="px-4 pt-10 md:px-8">
@@ -266,6 +287,9 @@ export function InboxView() {
                     <Badge>Documento</Badge>
                   )}
                   <span className="tabular w-16 text-right text-[12px] text-ink-3">{shortDate(i.updatedAt.slice(0, 10))}</span>
+                  <button type="button" className="text-[12px] font-semibold text-ink-3 hover:text-ink" onClick={() => void act('inbox.undo', { id: i.id }, 'Deshecho: vuelve a estar por confirmar')}>
+                    Deshacer
+                  </button>
                 </li>
               ))}
             </ul>
@@ -290,11 +314,12 @@ function Bar({ value, max, label }: { value: number; max: number; label: string 
 }
 
 function BatchProgress({ b, onClose }: { b: BatchState; onClose: () => void }) {
-  if (!b.total && !b.archives && !b.unsupported) return null;
+  if (!b.running && !b.total && !b.archives && !b.unsupported && !b.already) return null;
   const facts = [
     b.created && `${b.created} nuevos`,
     b.already && `${b.already} ya estaban`,
     b.reread && `${b.reread} releídos con OCR`,
+    b.linked && `${b.linked} enlazados con lo que ya habías subido`,
     b.savedToDrive && `${b.savedToDrive} guardados en Drive`,
     b.archives && `${b.archives} ZIP ignorados`,
     b.unsupported && `${b.unsupported} de otro tipo ignorados`,
@@ -303,7 +328,7 @@ function BatchProgress({ b, onClose }: { b: BatchState; onClose: () => void }) {
     <Card className="p-4">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          {b.running ? <Bar value={b.done} max={b.total} label={`Leyendo ${b.done} de ${b.total}… (las fotos tardan unos segundos cada una)`} /> : <p className="text-[13px] font-semibold">{b.total ? `Listo: ${b.total} documentos leídos` : 'No había documentos que leer'}</p>}
+          {b.running ? <Bar value={b.done} max={b.total} label={b.total ? `${b.label} ${b.done} de ${b.total}… (las fotos tardan unos segundos cada una)` : `${b.label}…`} /> : <p className="text-[13px] font-semibold">{b.total ? `Listo: ${b.total} documentos leídos` : 'No había documentos que leer'}</p>}
           {facts.length > 0 && <p className="mt-1 text-[12px] text-ink-3">{facts.join(' · ')}</p>}
           {b.errors.length > 0 && (
             <details className="mt-2 text-[12px]">
@@ -335,37 +360,83 @@ export function DriveBar({ notInDrive = 0, waiting = 0, pendingMoves = 0, onSync
     return (
       <div className="flex flex-wrap items-center gap-3 rounded-[10px] border border-line bg-surface px-3 py-2.5">
         <CloudOff size={15} className="shrink-0 text-ink-3" />
-        <p className="min-w-0 flex-1 text-[12.5px] text-ink-2">Conecta tu Google Drive para que cada archivo se guarde allí, ordenado por año, mes y tipo.</p>
+        <p className="min-w-0 flex-1 text-[12.5px] text-ink-2">Conecta tu Google Drive para que cada archivo se guarde en su carpeta de año, mes e ingresos o gastos.</p>
         <Button size="sm" variant="primary" onClick={() => void connectAndRegister()}>
           Conectar Google Drive
         </Button>
       </div>
     );
-  const extra = waiting || pendingMoves;
+  const extra = waiting + pendingMoves;
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-[10px] border border-line bg-surface px-3 py-2.5">
       <HardDrive size={15} className="shrink-0 text-ink-2" />
       <p className="min-w-0 flex-1 text-[12.5px] text-ink-2">
-        Drive de <strong className="text-ink">{drive.account}</strong> · carpeta «Business OS»
+        Drive de <strong className="text-ink">{drive.account}</strong> · {drive.layout ? <>carpeta «{drive.layout.rootName}»</> : <Link href="/settings" className="font-semibold underline">elige la carpeta de la agencia en Ajustes</Link>}
         {!drive.ready && <span className="text-ink-3"> · hay que reconectar (Google pide permiso cada hora)</span>}
-        {extra > 0 && <span className="text-ink-3"> · {waiting ? `${waiting} por subir` : ''}{waiting && pendingMoves ? ', ' : ''}{pendingMoves ? `${pendingMoves} por ordenar` : ''}</span>}
-        {!extra && notInDrive > 0 && <span className="text-ink-3"> · {notInDrive} sin copia en Drive: vuelve a soltar esos archivos y se completan</span>}
+        {extra > 0 && <span className="text-ink-3"> · {[waiting && `${waiting} por subir`, pendingMoves && `${pendingMoves} por ordenar`].filter(Boolean).join(', ')}</span>}
+        {!extra && notInDrive > 0 && <span className="text-ink-3"> · {notInDrive} sin copia en Drive (vuelve a soltarlos o impórtalos desde Drive)</span>}
       </p>
       {(!drive.ready || extra > 0) && onSync && (
         <Button size="sm" variant={drive.ready ? 'secondary' : 'primary'} onClick={onSync}>
           {drive.ready ? 'Guardar en Drive ahora' : 'Reconectar'}
         </Button>
       )}
-      <a href={`https://drive.google.com/drive/my-drive?authuser=${encodeURIComponent(drive.account)}`} target="_blank" rel="noreferrer" className="text-[12px] font-semibold text-ink-2 hover:text-ink">
+      <a href={driveUrl(drive.account, drive.layout?.rootId)} target="_blank" rel="noreferrer" className="text-[12px] font-semibold text-ink-2 hover:text-ink">
         Abrir Drive →
       </a>
     </div>
   );
 }
 
+/** Registers what's already in 00 - AÑOS/<year>, without moving or renaming anything. */
+function DriveImport({ onImport, busy }: { onImport: (f: { id: string; name: string }) => void; busy: boolean }) {
+  const drive = useDrive();
+  const [years, setYears] = useState<{ id: string; name: string }[] | null>(null);
+  const [year, setYear] = useState('');
+  if (!drive.enabled || !drive.account || !drive.layout?.yearsId) return null;
+  const load = async () => {
+    if (!(await ensureDrive(drive.account))) return;
+    try {
+      const kids = (await listChildren(drive.account!, drive.layout!.yearsId!, true)).filter((k) => k.mimeType === FOLDER_MIME).sort((a, b) => b.name.localeCompare(a.name));
+      setYears(kids.map((k) => ({ id: k.id, name: k.name })));
+      setYear(kids[0]?.id ?? '');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo leer Drive');
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-[10px] border border-dashed border-line-strong px-3 py-2.5">
+      <FolderInput size={15} className="shrink-0 text-ink-2" />
+      <p className="min-w-0 flex-1 text-[12.5px] text-ink-2">¿Las facturas ya están en tu Drive? Impórtalas desde «00 - AÑOS» sin moverlas: se registran en Facturación y lo que subiste del PC se enlaza, no se duplica.</p>
+      {years ? (
+        <>
+          <Select value={year} onChange={(e) => setYear(e.target.value)} className="w-[120px]" aria-label="Año">
+            {years.map((y) => (
+              <option key={y.id} value={y.id}>
+                {y.name}
+              </option>
+            ))}
+          </Select>
+          <Button size="sm" variant="primary" loading={busy} disabled={!year} onClick={async () => {
+            if (!(await ensureDrive(drive.account))) return;
+            const y = years.find((x) => x.id === year);
+            if (y) onImport(y);
+          }}>
+            Importar {years.find((y) => y.id === year)?.name}
+          </Button>
+        </>
+      ) : (
+        <Button size="sm" onClick={() => void load()}>
+          Importar desde Drive
+        </Button>
+      )}
+    </div>
+  );
+}
+
 const NEW = '__new';
 
-function GroupCard({ group, kind, clients, byId, today, onConfirm, busy }: { group: Group; kind: 'income' | 'expense'; clients: Client[]; byId: Map<string, Client>; today: string; onConfirm: (l: ConfirmInput[]) => Promise<void>; busy: boolean }) {
+function GroupCard({ group, kind, clients, byId, today, onConfirm, onRemove, busy }: { group: Group; kind: 'income' | 'expense'; clients: Client[]; byId: Map<string, Client>; today: string; onConfirm: (l: ConfirmInput[]) => Promise<void>; onRemove: (l: InboxItem[]) => Promise<number>; busy: boolean }) {
   const [open, setOpen] = useState(group.items.length <= 3);
   const [assign, setAssign] = useState<string>(group.clientId ?? (group.counterparty ? NEW : ''));
   const [paid, setPaid] = useState(group.items.every((i) => looksPaid(i.proposal.date.value, today)));
@@ -405,6 +476,9 @@ function GroupCard({ group, kind, clients, byId, today, onConfirm, busy }: { gro
             <Toggle on={paid} onChange={setPaid} label="Ya cobradas" />
           </div>
         )}
+        <Button size="sm" variant="ghost" icon={<Trash2 size={13} />} onClick={() => void onRemove(group.items).then((n) => toast(`${n} quitados del Inbox`))}>
+          Quitar
+        </Button>
         <Button size="sm" variant="primary" disabled={!confirmable.length || busy} onClick={() => void onConfirm(confirmable.map((x) => x.d.input!))}>
           Confirmar {confirmable.length}
           {confirmable.length < group.items.length ? ` de ${group.items.length}` : ''}
@@ -416,7 +490,7 @@ function GroupCard({ group, kind, clients, byId, today, onConfirm, busy }: { gro
             <li key={item.id}>
               {editing === item.id ? (
                 <div className="bg-surface-2 p-3">
-                  <ProposalCard item={item} onDone={() => setEditing(null)} />
+                  <ProposalCard item={item} onDone={() => setEditing(null)} onRemove={() => void onRemove([item])} />
                   <button type="button" className="mt-2 text-[12px] font-semibold text-ink-3 hover:text-ink" onClick={() => setEditing(null)}>
                     Cerrar
                   </button>

@@ -92,6 +92,15 @@ export const confirmInboxItem = defineAction({
         if (!input.clientId && !input.newClient) throw new ActionError('Indica a qué cliente corresponde la factura.');
         if (!input.invoiceNumber) throw new ActionError('Indica el número de factura.');
         const tax = input.taxId ? normalizeTaxId(input.taxId) : '';
+        // Same invoice already registered (e.g. imported from Drive and also uploaded from the PC): link, don't duplicate.
+        const variants = [...new Set([input.invoiceNumber, input.invoiceNumber.replace(/^0+(?=\d)/, ''), input.invoiceNumber.padStart(4, '0')])];
+        const same = (await Promise.all(variants.map((v) => tx.getQuery(ctx.col('invoices').where('invoiceNumber', '==', v).limit(5))))).flatMap((r) => r.docs);
+        const dup = same.map((d) => ({ id: d.id, ...(d.data() ?? {}) }) as { id: string; date?: string; total?: number }).find((d) => d.date?.slice(0, 4) === input.date.slice(0, 4) && Math.sign(d.total ?? 0) === sign);
+        if (dup) {
+          tx.update(ref, { status: 'completed', result: { kind: 'income', id: dup.id }, filedAs: filed('income'), updatedAt: ctx.now });
+          ctx.log(tx, { action: 'inbox.confirm', entity: { kind: 'inbox', id: item.id }, summary: `La factura ${input.invoiceNumber} ya estaba registrada: enlazada` });
+          return { kind: 'income' as const, id: dup.id, clientId: input.clientId, clientName: '', learned: false, duplicate: true };
+        }
         // Reads first (transactions can't read after writing).
         let client: Client;
         let createClient: Client | null = null;
@@ -117,7 +126,7 @@ export const confirmInboxItem = defineAction({
               updatedAt: ctx.now.toISOString(),
               name: nc.name,
               shortName: nc.name.toUpperCase().slice(0, 24),
-              legalName: nc.name,
+              legalName: nc.legalName || nc.name,
               taxId: ncTax,
               modules: [...DEFAULT_CLIENT_MODULES],
             });
@@ -217,4 +226,52 @@ export const updateProposals = defineAction({
   },
 });
 
-export const inboxActions = [createInboxItem, confirmInboxItem, discardInboxItem, attachDrive, updateProposals];
+export const removeInboxItems = defineAction({
+  name: 'inbox.remove',
+  description: 'Quita del Inbox archivos subidos por error (solo los que no están confirmados). No toca Facturación.',
+  input: z.object({ ids: z.array(z.string()).min(1).max(500) }),
+  critical: false,
+  handler: async (ctx, { ids }) => {
+    let removed = 0;
+    for (let k = 0; k < ids.length; k += 100) {
+      const chunk = ids.slice(k, k + 100);
+      await ctx.db.runTransaction(async (tx) => {
+        const snaps = await Promise.all(chunk.map((id) => tx.get(ctx.col('inbox').doc(id))));
+        snaps.forEach((snap, i) => {
+          const st = (snap.data() ?? {}).status;
+          if (!snap.exists || (st !== 'needs_confirmation' && st !== 'discarded')) return;
+          tx.delete(ctx.col('inbox').doc(chunk[i]!));
+          removed++;
+        });
+        if (removed) ctx.log(tx, { action: 'inbox.remove', entity: { kind: 'inbox', id: chunk[0]! }, summary: `${removed} archivos quitados del Inbox` });
+      });
+    }
+    return { removed };
+  },
+});
+
+export const undoInboxItem = defineAction({
+  name: 'inbox.undo',
+  description: 'Deshace una confirmación: borra el gasto o la factura creados y devuelve el archivo al Inbox.',
+  input: z.object({ id: z.string() }),
+  critical: true,
+  handler: async (ctx, { id }) => {
+    await ctx.db.runTransaction(async (tx) => {
+      const ref = ctx.col('inbox').doc(id);
+      const snap = await tx.get(ref);
+      const item = snap.exists ? parseDoc(InboxItemSchema, id, snap.data() ?? {}) : null;
+      if (!item) throw new ActionError('No existe.');
+      if (item.status === 'needs_confirmation') return;
+      const target = item.result?.id ? (item.result.kind === 'expense' ? ctx.col('expenses').doc(item.result.id) : item.result.kind === 'income' ? ctx.col('invoices').doc(item.result.id) : null) : null;
+      const t = target ? await tx.get(target) : null;
+      // Only remove what this file created (an imported invoice), never an invoice issued in the app.
+      const createdHere = t?.exists && (t.data() ?? {}).fileId === id && (item.result?.kind === 'expense' || (t.data() ?? {}).external === true);
+      if (target && createdHere) tx.delete(target);
+      tx.update(ref, { status: 'needs_confirmation', result: null, filedAs: null, ...(item.drive ? { drive: { ...item.drive, filed: false } } : {}), updatedAt: ctx.now });
+      ctx.log(tx, { action: 'inbox.undo', entity: { kind: 'inbox', id }, summary: `Deshecho: ${item.filename} vuelve al Inbox` });
+    });
+    return { id };
+  },
+});
+
+export const inboxActions = [createInboxItem, confirmInboxItem, discardInboxItem, attachDrive, updateProposals, removeInboxItems, undoInboxItem];

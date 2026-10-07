@@ -1,6 +1,7 @@
 import { billingActions } from './billing';
 import { clientActions } from './clients';
 import type { AnyAction } from './define';
+import { albaranActions } from './albaranes';
 import { inboxActions } from './inbox';
 import { settingsActions } from './settings';
 import { subscriptionActions } from './subscriptions';
@@ -17,6 +18,7 @@ const all: AnyAction[] = [
   ...billingActions,
   ...subscriptionActions,
   ...inboxActions,
+  ...albaranActions,
   ...settingsActions,
   ...systemActions,
 ] as AnyAction[];
