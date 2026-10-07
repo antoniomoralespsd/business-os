@@ -38,6 +38,9 @@ firebase deploy --only firestore:rules,firestore:indexes
 
 ## Estado
 
-- Fase 0: hecho (shell, sesión, acciones, activity log, reglas, índices).
-- Tareas: hecho (calendario semanal, drag & drop, estados, drawer, sin fecha, filtros, móvil).
-- Siguiente: conectar proyecto Firebase real → Clientes → Google Drive (multi-cuenta) → Inbox.
+- Fase 0: hecho (shell, sesión, acciones, activity log, reglas, índices). Firebase real `bussiness-os` conectado; App Hosting despliega en cada push a `main`.
+- Tareas: hecho (calendario semanal, drag & drop, estados, drawer, sin fecha, filtros, móvil, franja "Revisar", registrar como trabajo facturable).
+- Clientes: hecho (carpeta por cliente con módulos: resumen, tareas, trabajos, facturas, enlaces, caja fuerte cifrada en el navegador, notas, datos y tarifas).
+- Facturación, Suscripciones, Inbox (clasificación gasto/ingreso por reglas), Archivo, Ajustes, modo oscuro: hecho.
+- Migraciones puntuales: acción `system.migrate`, registradas en `migrations/{id}`.
+- Pendiente: activar Firebase Storage (Inbox guarda archivos), Google Drive multi-cuenta.
