@@ -209,7 +209,7 @@ export const updateProposals = defineAction({
       items.forEach((i, k) => {
         const d = snaps[k]!;
         if (!d.exists || (d.data() ?? {}).status !== 'needs_confirmation') return;
-        tx.update(ctx.col('inbox').doc(i.id), { proposal: i.proposal, updatedAt: ctx.now });
+        tx.update(ctx.col('inbox').doc(i.id), { proposal: i.proposal, ...(i.textExcerpt !== undefined ? { textExcerpt: i.textExcerpt } : {}), updatedAt: ctx.now });
         n++;
       });
     });

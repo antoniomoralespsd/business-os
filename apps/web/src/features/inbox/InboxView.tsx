@@ -294,6 +294,7 @@ function BatchProgress({ b, onClose }: { b: BatchState; onClose: () => void }) {
   const facts = [
     b.created && `${b.created} nuevos`,
     b.already && `${b.already} ya estaban`,
+    b.reread && `${b.reread} releídos con OCR`,
     b.savedToDrive && `${b.savedToDrive} guardados en Drive`,
     b.archives && `${b.archives} ZIP ignorados`,
     b.unsupported && `${b.unsupported} de otro tipo ignorados`,
@@ -302,7 +303,7 @@ function BatchProgress({ b, onClose }: { b: BatchState; onClose: () => void }) {
     <Card className="p-4">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          {b.running ? <Bar value={b.done} max={b.total} label={`Leyendo ${b.done} de ${b.total}…`} /> : <p className="text-[13px] font-semibold">{b.total ? `Listo: ${b.total} documentos leídos` : 'No había documentos que leer'}</p>}
+          {b.running ? <Bar value={b.done} max={b.total} label={`Leyendo ${b.done} de ${b.total}… (las fotos tardan unos segundos cada una)`} /> : <p className="text-[13px] font-semibold">{b.total ? `Listo: ${b.total} documentos leídos` : 'No había documentos que leer'}</p>}
           {facts.length > 0 && <p className="mt-1 text-[12px] text-ink-3">{facts.join(' · ')}</p>}
           {b.errors.length > 0 && (
             <details className="mt-2 text-[12px]">

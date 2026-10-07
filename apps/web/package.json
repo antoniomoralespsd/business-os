@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "build:demo": "BOS_DEMO_EXPORT=1 NEXT_PUBLIC_STATIC_EXPORT=1 NEXT_PUBLIC_DATA_MODE=memory next build && node scripts/fix-demo-export.mjs",
+    "dev": "node scripts/copy-ocr.mjs && next dev",
+    "build": "node scripts/copy-ocr.mjs && next build",
+    "build:demo": "node scripts/copy-ocr.mjs && BOS_DEMO_EXPORT=1 NEXT_PUBLIC_STATIC_EXPORT=1 NEXT_PUBLIC_DATA_MODE=memory next build && node scripts/fix-demo-export.mjs",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -22,6 +22,7 @@
     "@radix-ui/react-dialog": "^1.1.0",
     "@radix-ui/react-dropdown-menu": "^2.1.0",
     "@radix-ui/react-popover": "^1.1.0",
+    "@tesseract.js-data/spa": "^1.0.0",
     "clsx": "^2.1.1",
     "firebase": "^12.0.0",
     "firebase-admin": "^13.0.0",
@@ -32,6 +33,7 @@
     "react-dom": "^19.1.0",
     "server-only": "^0.0.1",
     "sonner": "^2.0.0",
+    "tesseract.js": "^5.1.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {

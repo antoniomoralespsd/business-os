@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Expense, Invoice, Job, Subscription } from '@bos/schemas';
 import { billingAlerts, formatInvoiceNumber, quarterOf, quarterRange, summarizeQuarter, unbilledByClient } from './billing';
-import { classifyDocument, findCounterparty, findDates, findTaxIds, findTotal, pathHints, suggestFilename } from './classify';
+import { classifyDocument, findCounterparty, monthInName, findDates, findTaxIds, findTotal, pathHints, suggestFilename } from './classify';
 import { computeTotals, formatEUR, parseEuro, splitVat } from './money';
 import { advanceRenewal, monthlyEquivalent, renewalWindow, subscriptionAlerts, subscriptionTotals, yearlyEquivalent } from './subscriptions';
 
@@ -178,6 +178,26 @@ describe('document classifier', () => {
 
   it('finds the counterparty from a label', () => {
     expect(findCounterparty('Facturar a: Bellaka Events SLU\nNIF B11111111', 'B11111111').value).toBe('Bellaka Events SLU');
+  });
+
+  it('reads the month from file names like "gasto nov 25 1.jpg"', () => {
+    expect(monthInName('gasto nov 25 1.jpg', { year: 2026, month: 1 })).toEqual({ year: 2025, month: 11 });
+    expect(monthInName('chatgpt enero 1.pdf', { year: 2026, month: 1 })).toEqual({ year: 2026, month: 1 });
+    expect(monthInName('gasto dic 2.jpg', { year: 2026, month: 1 })).toEqual({ year: 2025, month: 12 });
+    expect(monthInName('F2026-011.pdf', { year: 2026, month: 2 })).toBeNull();
+    const p = classifyDocument({ filename: 'gasto nov 25 1.jpg', mimeType: 'image/jpeg', text: '', path: '2026/01 ENERO/GASTOS/gasto nov 25 1.jpg' }, ctx);
+    expect(p.kind.value).toBe('expense');
+    expect(p.date.value).toBe('2025-11-01');
+    expect(p.invoiceNumber.value).toBeNull();
+  });
+
+  it('reads an OCR ticket', () => {
+    const text = 'MERCADONA, S.A.\nA-46103834\nC/ MAJOR 12 BARCELONA\nFACTURA SIMPLIFICADA: 2345-021-123456\n12/11/2025 18:32\nTOTAL (€) 23,45\nIVA BASE IMPONIBLE (€) CUOTA (€)\n10% 21,32 2,13';
+    const p = classifyDocument({ filename: 'gasto nov 25 1.jpg', mimeType: 'image/jpeg', text, path: '2026/01 ENERO/GASTOS/gasto nov 25 1.jpg' }, ctx);
+    expect(p.kind.value).toBe('expense');
+    expect(p.total.value).toBe(2345);
+    expect(p.date.value).toBe('2025-11-12');
+    expect(p.vendor.value).toBe('MERCADONA, S.A.');
   });
 });
 

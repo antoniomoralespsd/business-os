@@ -247,10 +247,27 @@ export function findCounterparty(text: string, taxId: string | null): Guess<stri
   return none();
 }
 
+const MONTH_ABBR: Record<string, number> = { ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6, jul: 7, ago: 8, sep: 9, set: 9, oct: 10, nov: 11, dic: 12 };
+const MONTH_IN_NAME = /(?:^|[^a-z])(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sep|set|oct|nov|dic)(?:[^a-z]|$)\s*(\d{4}|\d{2}(?!\d))?/;
+
+/** "gasto nov 25 1.jpg" → nov 2025; "chatgpt enero 1.pdf" in 2026/… → ene 2026. */
+export function monthInName(filename: string, hints: Pick<PathHints, 'year' | 'month'>): { year: number; month: number } | null {
+  const m = norm(filename.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ')).match(MONTH_IN_NAME);
+  if (!m) return null;
+  const month = MONTH_WORDS[m[1]!] ?? MONTH_ABBR[m[1]!];
+  if (!month) return null;
+  let year = m[2] ? (m[2].length === 2 ? 2000 + Number(m[2]) : Number(m[2])) : hints.year;
+  if (!year) return null;
+  // "dic" inside 2026/01 ENERO without a year → December of the year before.
+  if (!m[2] && hints.month && month > hints.month) year -= 1;
+  return { year, month };
+}
+
 function invoiceNumber(text: string, filename: string): Guess<string> {
   const found = findInvoiceNumber(text);
   if (found.value) return found;
   const stem = filename.replace(/\.[a-z0-9]+$/i, '').trim();
+  if (MONTH_IN_NAME.test(norm(stem.replace(/[_-]+/g, ' ')))) return found;
   // "F2026-011", "Factura 34", "2026_015 City Hall" → use the file name when it carries a number.
   const m = stem.match(/(?:factura|fra\.?|fact\.?)?\s*([A-Z]{0,4}[-_ ]?\d{1,4}(?:[-_/]\d{1,5})?)/i);
   if (m && /\d/.test(m[1]!) && !/\d{4}-\d{2}-\d{2}|whatsapp|img[-_ ]\d|scan/i.test(stem)) return guess(m[1]!.trim().replace(/_/g, '-'), 0.45, 'Sacado del nombre del archivo');
@@ -346,9 +363,11 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
   const fechaLine = text.split(/\r?\n/).find((l) => /fecha|date|emisi[oó]n/i.test(l) && findDates(l).length);
   const dates = findDates(text);
   const fileDates = findDates(input.filename.replace(/[_]/g, '-'));
+  const nameMonth = monthInName(input.filename, hints);
   if (fechaLine) date = guess(findDates(fechaLine)[0]!, 0.9, 'Línea de fecha');
   else if (dates.length) date = guess(dates[0]!, 0.7, 'Primera fecha del documento');
   else if (fileDates.length) date = guess(fileDates[0]!, 0.6, 'Fecha en el nombre del archivo');
+  else if (nameMonth) date = guess(`${nameMonth.year}-${pad(nameMonth.month)}-01`, 0.5, 'Mes en el nombre del archivo');
   else if (folderDate) date = guess(folderDate, 0.4, 'Mes de la carpeta');
   // A date far from the folder's month is probably a due date or a service date: prefer the folder month.
   if (folderDate && date.value && date.value.slice(0, 7) !== folderDate.slice(0, 7) && date.confidence < 0.9) {

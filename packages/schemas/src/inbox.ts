@@ -70,7 +70,7 @@ export const CreateInboxItemInput = z.object({
 });
 
 export const AttachDriveInput = z.object({ id: IdSchema, drive: DriveRefSchema });
-export const UpdateProposalsInput = z.object({ items: z.array(z.object({ id: IdSchema, proposal: InboxProposalSchema })).min(1).max(300) });
+export const UpdateProposalsInput = z.object({ items: z.array(z.object({ id: IdSchema, proposal: InboxProposalSchema, textExcerpt: z.string().max(4000).optional() })).min(1).max(300) });
 
 export const ConfirmInboxInput = z.object({
   id: IdSchema,

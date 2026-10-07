@@ -7,7 +7,7 @@ import { useGoogleSettings } from '@/data/hooks';
 import { callAction } from '@/lib/actionsClient';
 import { DATA_MODE } from '@/lib/config';
 import { billingFolder, connectDrive, DISCARDED_FOLDER, DriveAuthNeeded, hasToken, INBOX_FOLDER, moveInDrive, onDriveTokens, uploadToDrive, warmUpDrive } from '@/lib/drive';
-import { extOf, pdfText, sha256 } from '@/lib/fileTools';
+import { documentText, extOf, sha256 } from '@/lib/fileTools';
 import { verdictFor, type PickedFile } from '@/lib/folderFiles';
 
 /* ---------- Drive state ---------- */
@@ -46,11 +46,12 @@ export type BatchState = {
   archives: number;
   unsupported: number;
   savedToDrive: number;
+  reread: number;
   waitingDrive: number;
   errors: { name: string; message: string }[];
   running: boolean;
 };
-const EMPTY: BatchState = { total: 0, done: 0, created: 0, already: 0, archives: 0, unsupported: 0, savedToDrive: 0, waitingDrive: 0, errors: [], running: false };
+const EMPTY: BatchState = { total: 0, done: 0, created: 0, already: 0, archives: 0, unsupported: 0, savedToDrive: 0, reread: 0, waitingDrive: 0, errors: [], running: false };
 
 type Ctx = { items: InboxItem[] | null; clients: Client[] | null; subs: Subscription[] | null; issuer: IssuerSettings | null };
 
@@ -130,11 +131,20 @@ export function useInboxPipeline(ctx: Ctx) {
               const target = existing.filedAs ? { name: existing.filedAs.name, path: billingFolder(existing.filedAs.date, existing.filedAs.kind, existing.filedAs.rectificativa) } : null;
               if (await saveOne(existing.id, file, target)) bump((b) => ({ savedToDrive: b.savedToDrive + 1 }));
             }
+            // Pending and never read (photos uploaded before OCR existed): read it now and re-propose.
+            if (existing.status === 'needs_confirmation' && existing.textExcerpt.replace(/\s/g, '').length < 30) {
+              const { text } = await documentText(file);
+              if (text.trim()) {
+                const proposal = classifyDocument({ filename: existing.filename, mimeType: existing.mimeType, text, path: existing.sourcePath || path }, classifyCtx(ctxRef.current));
+                await callAction('inbox.updateProposals', { items: [{ id: existing.id, proposal, textExcerpt: text.slice(0, 4000) }] });
+                bump((b) => ({ reread: b.reread + 1 }));
+              }
+            }
             bump((b) => ({ already: b.already + 1 }));
             return;
           }
           const isPdf = file.type === 'application/pdf' || extOf(file.name) === 'pdf';
-          const text = isPdf ? await pdfText(file).catch(() => '') : '';
+          const { text } = await documentText(file);
           const proposal = classifyDocument({ filename: file.name, mimeType: file.type, text, path }, classifyCtx(ctxRef.current));
           const r = await callAction<{ id: string }>('inbox.create', {
             filename: file.name.slice(0, 250),
