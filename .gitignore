@@ -7,3 +7,5 @@ out
 .turbo
 coverage
 service-account*.json
+
+/.apphosting/

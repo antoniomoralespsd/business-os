@@ -12,7 +12,7 @@ const config: NextConfig = {
   transpilePackages: ['@bos/domain', '@bos/schemas'],
   ...(demo
     ? { output: 'export', pageExtensions: ['tsx', 'ts'], images: { unoptimized: true }, assetPrefix: './a' }
-    : { pageExtensions: ['tsx', 'ts', 'server.ts'] }),
+    : { output: 'standalone', pageExtensions: ['tsx', 'ts', 'server.ts'] }),
 };
 
 export default config;
