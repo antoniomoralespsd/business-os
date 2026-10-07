@@ -10,6 +10,8 @@ import { act, useIssuer, useVaultEntries, useVaultMeta } from '@/data/hooks';
 import { readPort } from '@/data/read';
 import { useVaultKey } from '@/features/clients/modules/VaultModule';
 import { DATA_MODE } from '@/lib/config';
+import { forgetDrive, hasToken } from '@/lib/drive';
+import { connectAndRegister, useDrive } from '@/features/inbox/pipeline';
 import { downloadText } from '@/lib/format';
 import { setThemePref, useThemePref, type ThemePref } from '@/lib/theme';
 import { createVault, decryptText, encryptText, setVaultKey, unlockVault } from '@/lib/vault';
@@ -243,28 +245,80 @@ function VaultSection() {
 /* ---------- google accounts ---------- */
 
 function AccountsSection() {
-  const accounts = [
-    { email: 'antoniomorales.psd@gmail.com', role: 'Negocio · inicio de sesión, facturas, Gmail de facturas' },
-    { email: 'a9214@esdi.edu.es', role: 'Almacén pesado · vídeos y entregas grandes' },
-    { email: 'tonimc99@gmail.com', role: 'Personal · solo para entrar (opcional)' },
-  ];
+  const drive = useDrive();
+  const roles: Record<string, string> = {
+    'antoniomorales.psd@gmail.com': 'Negocio · facturas y material',
+    'a9214@esdi.edu.es': 'Universidad · almacenamiento ilimitado',
+    'tonimc99@gmail.com': 'Personal',
+  };
+  if (DATA_MODE !== 'firestore')
+    return (
+      <Section title="Cuentas de Google" description="Drive para guardar facturas y documentos ordenados.">
+        <p className="text-[12.5px] text-ink-3">En la demo no se conecta con Google.</p>
+      </Section>
+    );
+  const accounts = drive.settings?.accounts ?? [];
   return (
-    <Section title="Cuentas de Google" description="Conexión con Drive y Gmail para guardar entregas y detectar facturas en el correo.">
-      <Card>
-        <ul className="divide-y divide-line">
-          {accounts.map((a) => (
-            <li key={a.email} className="flex flex-wrap items-center gap-3 px-4 py-3">
-              {a.email.includes('esdi') ? <HardDrive size={15} className="text-ink-3" /> : <Mail size={15} className="text-ink-3" />}
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[13px] font-medium">{a.email}</p>
-                <p className="truncate text-[11.5px] text-ink-3">{a.role}</p>
-              </div>
-              <Badge>Próximamente</Badge>
-            </li>
-          ))}
-        </ul>
-      </Card>
-      <p className="mt-2 text-[11.5px] text-ink-3">Mientras tanto, los archivos que subes al Inbox se guardan en el almacenamiento de Firebase del proyecto.</p>
+    <Section title="Cuentas de Google" description="Cada archivo que confirmas en el Inbox se guarda en el Drive elegido, en «Business OS / Facturación / año / mes / Ingresos o Gastos». La app solo ve lo que ella misma crea.">
+      {!drive.settings ? (
+        <Loading rows={2} />
+      ) : (
+        <div className="space-y-3">
+          <Card>
+            <ul className="divide-y divide-line">
+              {accounts.length === 0 && <li className="px-4 py-3 text-[12.5px] text-ink-3">Ninguna cuenta conectada todavía.</li>}
+              {accounts.map((a) => {
+                const isBilling = drive.account === a.email;
+                const live = hasToken(a.email);
+                return (
+                  <li key={a.email} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    {a.email.includes('esdi') ? <HardDrive size={15} className="text-ink-3" /> : <Mail size={15} className="text-ink-3" />}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[13px] font-medium">{a.email}</p>
+                      <p className="truncate text-[11.5px] text-ink-3">{roles[a.email] ?? 'Cuenta de Google'}{live ? ' · conectada en este navegador' : ''}</p>
+                    </div>
+                    {isBilling ? (
+                      <Badge tone="ok">Facturación</Badge>
+                    ) : (
+                      <Button size="sm" variant="ghost" onClick={() => act('settings.google', { billingAccount: a.email }, `La facturación se guardará en ${a.email}`)}>
+                        Usar para facturación
+                      </Button>
+                    )}
+                    {!live && (
+                      <Button size="sm" onClick={() => void connectAndRegister(a.email)}>
+                        Conectar
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        forgetDrive(a.email);
+                        void act('settings.google', { remove: a.email }, 'Cuenta quitada (los archivos siguen en su Drive)');
+                      }}
+                    >
+                      Quitar
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          </Card>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button icon={<HardDrive size={14} />} onClick={() => void connectAndRegister()}>
+              Añadir cuenta de Google
+            </Button>
+            <p className="text-[11.5px] text-ink-3">Por seguridad, Google da permiso por una hora: cuando caduca, la app te pide reconectar con un clic.</p>
+          </div>
+          <p className="text-[11.5px] leading-relaxed text-ink-3">
+            Si al guardar aparece «La API de Google Drive no está activada», actívala una vez aquí:{' '}
+            <a className="font-semibold underline" href="https://console.cloud.google.com/apis/library/drive.googleapis.com?project=bussiness-os" target="_blank" rel="noreferrer">
+              Google Cloud → Google Drive API → Habilitar
+            </a>
+            .
+          </p>
+        </div>
+      )}
     </Section>
   );
 }

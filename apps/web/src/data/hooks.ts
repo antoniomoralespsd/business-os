@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import {
   ClientSchema,
   ExpenseSchema,
+  GoogleSettingsSchema,
   InboxItemSchema,
   InvoiceSchema,
   IssuerSettingsSchema,
@@ -14,6 +15,7 @@ import {
   VaultEntrySchema,
   VaultMetaSchema,
   type Client,
+  type GoogleSettings,
   type IssuerSettings,
 } from '@bos/schemas';
 import { callAction } from '@/lib/actionsClient';
@@ -58,6 +60,11 @@ export const useVaultEntries = (filters: Filter[] = []) => useCollection('vault'
 export function useIssuer(): IssuerSettings | null {
   const raw = useDocData('settings', 'issuer');
   return useMemo(() => (raw === undefined ? null : IssuerSettingsSchema.parse(raw ?? {})), [raw]);
+}
+
+export function useGoogleSettings(): GoogleSettings | null {
+  const raw = useDocData('settings', 'google');
+  return useMemo(() => (raw === undefined ? null : GoogleSettingsSchema.parse(raw ?? {})), [raw]);
 }
 
 export function useVaultMeta() {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CipherSchema, IssuerSettingsInput, UpdateVaultEntryInput, VaultEntryInput, VaultMetaSchema } from '@bos/schemas';
+import { CipherSchema, GoogleSettingsSchema, IssuerSettingsInput, UpdateVaultEntryInput, VaultEntryInput, VaultMetaSchema } from '@bos/schemas';
 import { ActionError, baseFields, clean, defineAction } from './define';
 
 export const updateIssuer = defineAction({
@@ -13,6 +13,34 @@ export const updateIssuer = defineAction({
       const cur = await tx.get(ref);
       tx.set(ref, { ...(cur.data() ?? {}), ...clean(input), updatedAt: ctx.now });
       ctx.log(tx, { action: 'settings.issuer', entity: { kind: 'settings', id: 'issuer' }, summary: 'Datos fiscales actualizados' });
+    });
+    return { ok: true };
+  },
+});
+
+export const updateGoogle = defineAction({
+  name: 'settings.google',
+  description: 'Cuentas de Google conectadas para Drive (sin tokens) y cuenta donde se guarda la facturación.',
+  input: z.object({
+    add: z.string().email().optional(),
+    remove: z.string().email().optional(),
+    billingAccount: z.string().email().nullable().optional(),
+  }),
+  critical: false,
+  handler: async (ctx, input) => {
+    await ctx.db.runTransaction(async (tx) => {
+      const ref = ctx.col('settings').doc('google');
+      const cur = GoogleSettingsSchema.parse((await tx.get(ref)).data() ?? {});
+      let accounts = cur.accounts;
+      let billing = cur.billingAccount;
+      if (input.add && !accounts.some((a) => a.email === input.add)) accounts = [...accounts, { email: input.add, addedAt: ctx.now.toISOString() }];
+      if (input.remove) accounts = accounts.filter((a) => a.email !== input.remove);
+      if (input.billingAccount !== undefined) billing = input.billingAccount;
+      if (billing && !accounts.some((a) => a.email === billing)) billing = null;
+      if (!billing && accounts.length) billing = accounts[0]!.email;
+      tx.set(ref, { accounts, billingAccount: billing, updatedAt: ctx.now });
+      const what = input.add ? `Cuenta de Google conectada: ${input.add}` : input.remove ? `Cuenta de Google quitada: ${input.remove}` : `Facturación se guarda en ${billing ?? '—'}`;
+      ctx.log(tx, { action: 'settings.google', entity: { kind: 'settings', id: 'google' }, summary: what });
     });
     return { ok: true };
   },
@@ -134,4 +162,4 @@ export const logVaultReveal = defineAction({
   },
 });
 
-export const settingsActions = [updateIssuer, setupVault, rekeyVault, resetVault, createVaultEntry, updateVaultEntry, deleteVaultEntry, logVaultReveal];
+export const settingsActions = [updateIssuer, updateGoogle, setupVault, rekeyVault, resetVault, createVaultEntry, updateVaultEntry, deleteVaultEntry, logVaultReveal];

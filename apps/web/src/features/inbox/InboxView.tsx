@@ -1,18 +1,22 @@
 'use client';
 import clsx from 'clsx';
-import { AlertTriangle, CheckCircle2, ExternalLink, FileText, ImageIcon, Loader2, UploadCloud, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, CloudOff, FolderUp, HardDrive, RefreshCw, UploadCloud, Wand2, X } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { EXPENSE_CATEGORIES, type InboxItem, type InboxKind } from '@bos/schemas';
-import { classifyDocument, formatEUR, suggestFilename, todayISO } from '@bos/domain';
-import { Badge, Button, Card, EmptyState, Field, Input, Loading, MoneyInput, PageHeader, Segmented, Select } from '@/components/ui/kit';
-import { act, useClients, useInbox, useIssuer, useSubscriptions } from '@/data/hooks';
-import { EXPENSE_CATEGORY_LABEL } from '@/features/billing/status';
-import { DATA_MODE } from '@/lib/config';
-import { extOf, pdfText, sha256 } from '@/lib/fileTools';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import type { Client, InboxItem } from '@bos/schemas';
+import { classifyDocument, formatEUR, todayISO } from '@bos/domain';
+import { Badge, Button, Card, EmptyState, Loading, PageHeader, Segmented, Select, Toggle } from '@/components/ui/kit';
+import { useClientMap, useClients, useInbox, useIssuer, useSubscriptions } from '@/data/hooks';
+import { callAction } from '@/lib/actionsClient';
+import { hasToken } from '@/lib/drive';
+import { filesFromDrop, filesFromInput, type PickedFile } from '@/lib/folderFiles';
 import { shortDate } from '@/lib/format';
+import { confidenceOf, draftFrom, groupPending, looksPaid, type ConfirmInput, type Group, type Override } from './drafts';
+import { classifyCtx, connectAndRegister, useDrive, useInboxPipeline, type BatchState } from './pipeline';
+import { Conf, FileIcon, FileLink, ProposalCard } from './ProposalCard';
 
-type Job = { id: string; name: string; state: 'reading' | 'uploading' | 'done' | 'error'; message?: string };
+type View = 'all' | 'income' | 'expense' | 'other';
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.heic,application/pdf,image/*';
 
 export function InboxView() {
@@ -20,60 +24,102 @@ export function InboxView() {
   const { data: clients } = useClients();
   const { data: subs } = useSubscriptions();
   const issuer = useIssuer();
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const byId = useClientMap(clients);
+  const drive = useDrive();
+  const pipe = useInboxPipeline({ items, clients, subs, issuer });
   const [drag, setDrag] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [view, setView] = useState<View>('all');
+  const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const filesRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
+  const today = todayISO();
+  const ctxRef = useRef({ items, clients, subs, issuer });
+  ctxRef.current = { items, clients, subs, issuer };
 
-  const pending = useMemo(() => (items ?? []).filter((i) => i.status === 'needs_confirmation').sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [items]);
+  useEffect(() => {
+    folderRef.current?.setAttribute('webkitdirectory', '');
+    folderRef.current?.setAttribute('directory', '');
+  }, []);
+
+  const pending = useMemo(() => (items ?? []).filter((i) => i.status === 'needs_confirmation'), [items]);
+  const groups = useMemo(() => groupPending(pending, byId), [pending, byId]);
   const done = useMemo(() => (items ?? []).filter((i) => i.status !== 'needs_confirmation').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 15), [items]);
+  const notInDrive = useMemo(() => (items ?? []).filter((i) => i.status !== 'discarded' && !i.drive).length, [items]);
 
-  const process = useCallback(
-    async (files: File[]) => {
-      for (const file of files) {
-        const id = `${file.name}-${file.size}-${Math.random()}`;
-        const update = (p: Partial<Job>) => setJobs((js) => js.map((j) => (j.id === id ? { ...j, ...p } : j)));
-        setJobs((js) => [{ id, name: file.name, state: 'reading' }, ...js]);
-        try {
-          const hash = await sha256(file);
-          const isPdf = file.type === 'application/pdf' || extOf(file.name) === 'pdf';
-          const text = isPdf ? await pdfText(file).catch(() => '') : '';
-          const proposal = classifyDocument(
-            { filename: file.name, mimeType: file.type, text },
-            { issuer: { name: issuer?.name ?? '', legalName: issuer?.legalName ?? '', taxId: issuer?.taxId ?? '' }, clients: clients ?? [], subscriptions: subs ?? [], today: todayISO() },
-          );
-          let storagePath: string | null = null;
-          let warning: string | undefined;
-          if (DATA_MODE === 'firestore') {
-            update({ state: 'uploading' });
-            const fd = new FormData();
-            fd.append('file', file);
-            fd.append('sha256', hash);
-            const res = await fetch('/api/upload', { method: 'POST', body: fd });
-            const json = (await res.json().catch(() => null)) as { ok: boolean; storagePath?: string | null; warning?: string; error?: string } | null;
-            if (!json?.ok) throw new Error(json?.error ?? 'No se pudo subir');
-            storagePath = json.storagePath ?? null;
-            warning = json.warning;
-          }
-          const r = await act<{ id: string; duplicateOf: string | null }>('inbox.create', { filename: file.name, mimeType: file.type || 'application/octet-stream', size: file.size, sha256: hash, storagePath, textExcerpt: text.slice(0, 20000), proposal });
-          update({ state: r ? 'done' : 'error', message: r?.duplicateOf ? 'Posible duplicado de un archivo anterior' : warning ?? (isPdf && !text ? 'PDF escaneado: rellena los datos a mano' : undefined) });
-        } catch (e) {
-          update({ state: 'error', message: e instanceof Error ? e.message : 'Error' });
-        }
-      }
-    },
-    [clients, subs, issuer],
+  /** Everything that can be confirmed without looking: no missing data, decent confidence, not a duplicate. */
+  const ready = useMemo(
+    () =>
+      pending
+        .filter((i) => i.proposal.kind.value !== 'other' && !i.duplicateOf && confidenceOf(i) >= 0.4)
+        .map((i) => ({ item: i, d: draftFrom(i, byId, today) }))
+        .filter((x): x is { item: InboxItem; d: { input: ConfirmInput; missing: string[] } } => !!x.d.input),
+    [pending, byId, today],
   );
 
-  const onFiles = (list: FileList | null) => list && list.length && void process([...list]);
+  const start = (picked: Promise<PickedFile[]> | PickedFile[]) => {
+    // A drop/click is the only moment the browser lets us open the Google window.
+    if (drive.enabled && drive.account && !hasToken(drive.account)) void connectAndRegister(drive.account);
+    void Promise.resolve(picked).then((list) => (list.length ? pipe.process(list) : undefined));
+  };
+
+  /** Confirms a list in order; then re-reads the rest with what was learned (new clients, NIFs). */
+  const confirmMany = async (list: ConfirmInput[]) => {
+    if (!list.length) return;
+    if (drive.enabled && drive.account && !hasToken(drive.account)) void connectAndRegister(drive.account);
+    setBulk({ done: 0, total: list.length });
+    let ok = 0;
+    let learned = false;
+    const failed: string[] = [];
+    for (const input of list) {
+      try {
+        const r = await callAction<{ learned?: boolean }>('inbox.confirm', input);
+        ok++;
+        learned ||= !!r?.learned;
+      } catch (e) {
+        failed.push(e instanceof Error ? e.message : 'Error');
+      }
+      setBulk({ done: ok + failed.length, total: list.length });
+    }
+    setBulk(null);
+    toast(`${ok} ${ok === 1 ? 'archivo confirmado' : 'archivos confirmados'}${failed.length ? ` · ${failed.length} con error: ${failed[0]}` : ''}`);
+    if (learned) setTimeout(() => void reclassify(true), 1200);
+  };
+
+  /** Runs the classifier again on pending files with today's clients and settings. */
+  const reclassify = async (quiet = false) => {
+    const c = ctxRef.current;
+    const list = (c.items ?? []).filter((i) => i.status === 'needs_confirmation');
+    const changed = list
+      .map((i) => ({ id: i.id, before: i.proposal, proposal: classifyDocument({ filename: i.filename, mimeType: i.mimeType, text: i.textExcerpt, path: i.sourcePath }, classifyCtx(c)) }))
+      .filter((x) => JSON.stringify(x.before) !== JSON.stringify(x.proposal));
+    for (let k = 0; k < changed.length; k += 200) await callAction('inbox.updateProposals', { items: changed.slice(k, k + 200).map(({ id, proposal }) => ({ id, proposal })) });
+    if (!quiet || changed.length) toast(changed.length ? `${changed.length} archivos reclasificados` : 'Nada que cambiar');
+  };
+
+  const shown = (k: View) => view === 'all' || view === k;
+  const incomeCount = groups.income.reduce((s, g) => s + g.items.length, 0);
+  const expenseCount = groups.expense.reduce((s, g) => s + g.items.length, 0);
 
   return (
     <div className="pb-16">
       <PageHeader title="Inbox" />
       <p className="mt-2 max-w-2xl px-4 text-[13.5px] leading-relaxed text-ink-2 md:px-8">
-        Suelta aquí facturas, tickets y documentos. La app lee cada uno, decide si es un gasto o un ingreso, y propone proveedor o cliente, fecha, importe e IVA. Tú confirmas y queda registrado en Facturación.
+        Suelta archivos o carpetas enteras (por ejemplo tu carpeta de facturas del año). La app lee cada documento, decide si es gasto o ingreso, lo asigna a su cliente y, al confirmar, lo guarda ordenado en Facturación y en tu Google Drive.
       </p>
 
-      <div className="px-4 pt-5 md:px-8">
+      <div className="space-y-3 px-4 pt-5 md:px-8">
+        <DriveBar notInDrive={notInDrive} waiting={pipe.waitingCount} pendingMoves={pipe.pendingMoves} onSync={() => void pipe.syncDrive(true)} />
+        {issuer && !issuer.taxId && (
+          <p className="flex items-center gap-2 rounded-[10px] border border-line bg-surface px-3 py-2 text-[12.5px] text-ink-2">
+            <AlertTriangle size={14} className="shrink-0 text-warn" />
+            Pon tu NIF en{' '}
+            <Link href="/settings" className="font-semibold underline">
+              Ajustes → Datos fiscales
+            </Link>{' '}
+            para distinguir mejor tus facturas emitidas de las recibidas.
+          </p>
+        )}
+
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -83,42 +129,117 @@ export function InboxView() {
           onDrop={(e) => {
             e.preventDefault();
             setDrag(false);
-            onFiles(e.dataTransfer.files);
+            start(filesFromDrop(e.dataTransfer));
           }}
-          onClick={() => inputRef.current?.click()}
-          className={clsx('relative flex cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[16px] border-2 border-dashed px-6 py-10 text-center transition-colors', drag ? 'border-transparent bg-surface' : 'border-line-strong hover:border-ink')}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => e.key === 'Enter' && inputRef.current?.click()}
+          className={clsx('relative flex flex-col items-center justify-center overflow-hidden rounded-[16px] border-2 border-dashed px-6 py-9 text-center transition-colors', drag ? 'border-transparent bg-surface' : 'border-line-strong')}
         >
           {drag && <span className="iris-bar-x absolute inset-0 -z-0 opacity-20" aria-hidden />}
           <UploadCloud size={28} className="relative text-ink-2" />
-          <p className="font-display relative mt-3 text-[26px] leading-tight">Suelta archivos aquí</p>
-          <p className="relative mt-1 text-[12.5px] text-ink-3">PDF, JPG, PNG o fotos del móvil · varios a la vez</p>
-          <input ref={inputRef} type="file" multiple accept={ACCEPT} className="hidden" onChange={(e) => onFiles(e.target.files)} />
+          <p className="font-display relative mt-3 text-[26px] leading-tight">Suelta archivos o carpetas</p>
+          <p className="relative mt-1 text-[12.5px] text-ink-3">PDF, JPG, PNG o fotos del móvil · las subcarpetas «Gastos», «Ingresos», «Rectificativas» y el mes ayudan a clasificar · los ZIP se ignoran</p>
+          <div className="relative mt-4 flex flex-wrap justify-center gap-2">
+            <Button icon={<UploadCloud size={14} />} onClick={() => filesRef.current?.click()}>
+              Elegir archivos
+            </Button>
+            <Button icon={<FolderUp size={14} />} onClick={() => folderRef.current?.click()}>
+              Subir una carpeta
+            </Button>
+          </div>
+          <input
+            ref={filesRef}
+            type="file"
+            multiple
+            accept={ACCEPT}
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files?.length) start(filesFromInput(e.target.files));
+              e.target.value = '';
+            }}
+          />
+          <input
+            ref={folderRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files?.length) start(filesFromInput(e.target.files));
+              e.target.value = '';
+            }}
+          />
         </div>
 
-        {jobs.length > 0 && (
-          <ul className="mt-3 space-y-1">
-            {jobs.slice(0, 8).map((j) => (
-              <li key={j.id} className="flex items-center gap-2 text-[12.5px]">
-                {j.state === 'done' ? <CheckCircle2 size={14} className="text-ok" /> : j.state === 'error' ? <AlertTriangle size={14} className="text-danger" /> : <Loader2 size={14} className="animate-spin text-ink-3" />}
-                <span className="truncate">{j.name}</span>
-                <span className="text-ink-3">{j.state === 'reading' ? 'Leyendo…' : j.state === 'uploading' ? 'Subiendo…' : j.message ?? (j.state === 'done' ? 'Listo para revisar' : '')}</span>
-                {j.state !== 'reading' && j.state !== 'uploading' && (
-                  <button type="button" aria-label="Quitar" className="ml-auto text-ink-3 hover:text-ink" onClick={() => setJobs((js) => js.filter((x) => x.id !== j.id))}>
-                    <X size={12} />
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
+        <BatchProgress b={pipe.batch} onClose={pipe.clearBatch} />
       </div>
 
-      <div className="space-y-4 px-4 pt-8 md:px-8">
-        <p className="eyebrow text-ink-2">Por confirmar · {pending.length}</p>
-        {!items ? <Loading /> : pending.length === 0 ? <EmptyState title="Bandeja vacía">Todo lo que subas aparecerá aquí para que lo confirmes con un clic.</EmptyState> : pending.map((i) => <ProposalCard key={i.id} item={i} />)}
+      <div className="px-4 pt-8 md:px-8">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="eyebrow text-ink-2">Por confirmar · {pending.length}</p>
+          {pending.length > 0 && (
+            <Segmented<View>
+              size="sm"
+              value={view}
+              onChange={setView}
+              options={[
+                { value: 'all', label: 'Todo' },
+                { value: 'income', label: `Ingresos ${incomeCount}` },
+                { value: 'expense', label: `Gastos ${expenseCount}` },
+                { value: 'other', label: `Otros ${groups.other.length}` },
+              ]}
+            />
+          )}
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {pending.length > 0 && (
+              <Button size="sm" variant="ghost" icon={<RefreshCw size={13} />} onClick={() => void reclassify()}>
+                Volver a clasificar
+              </Button>
+            )}
+            {ready.length > 0 && (
+              <Button size="sm" variant="primary" icon={<Wand2 size={13} />} loading={!!bulk} onClick={() => void confirmMany(ready.map((r) => r.d.input))}>
+                Confirmar todo lo listo ({ready.length})
+              </Button>
+            )}
+          </div>
+        </div>
+        {bulk && (
+          <div className="mt-3">
+            <Bar value={bulk.done} max={bulk.total} label={`Confirmando ${bulk.done} de ${bulk.total}…`} />
+          </div>
+        )}
+
+        <div className="mt-4 space-y-6">
+          {!items ? (
+            <Loading />
+          ) : pending.length === 0 ? (
+            <EmptyState title="Bandeja vacía">Todo lo que subas aparecerá aquí, agrupado por cliente, para que lo confirmes de una vez.</EmptyState>
+          ) : (
+            <>
+              {shown('income') && groups.income.length > 0 && (
+                <section className="space-y-3">
+                  <p className="eyebrow text-ink-3">Ingresos · por cliente</p>
+                  {groups.income.map((g) => (
+                    <GroupCard key={g.key} group={g} kind="income" clients={clients ?? []} byId={byId} today={today} onConfirm={confirmMany} busy={!!bulk} />
+                  ))}
+                </section>
+              )}
+              {shown('expense') && groups.expense.length > 0 && (
+                <section className="space-y-3">
+                  <p className="eyebrow text-ink-3">Gastos · por mes</p>
+                  {groups.expense.map((g) => (
+                    <GroupCard key={g.key} group={g} kind="expense" clients={clients ?? []} byId={byId} today={today} onConfirm={confirmMany} busy={!!bulk} />
+                  ))}
+                </section>
+              )}
+              {shown('other') && groups.other.length > 0 && (
+                <section className="space-y-3">
+                  <p className="eyebrow text-ink-3">Otros documentos</p>
+                  {groups.other.map((i) => (
+                    <ProposalCard key={i.id} item={i} />
+                  ))}
+                </section>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {done.length > 0 && (
@@ -129,7 +250,8 @@ export function InboxView() {
               {done.map((i) => (
                 <li key={i.id} className="flex items-center gap-3 px-4 py-2.5 text-[13px]">
                   <FileIcon mime={i.mimeType} />
-                  <span className="min-w-0 flex-1 truncate">{i.filename}</span>
+                  <span className="min-w-0 flex-1 truncate">{i.filedAs?.name ?? i.filename}</span>
+                  {i.drive && <span className="hidden truncate text-[11.5px] text-ink-3 md:inline">{i.drive.folder.replace(/^Business OS\//, '')}</span>}
                   {i.status === 'discarded' ? (
                     <Badge>Descartado</Badge>
                   ) : i.result?.kind === 'expense' ? (
@@ -154,171 +276,174 @@ export function InboxView() {
   );
 }
 
-function FileIcon({ mime }: { mime: string }) {
-  return mime.startsWith('image/') ? <ImageIcon size={15} className="shrink-0 text-ink-3" /> : <FileText size={15} className="shrink-0 text-ink-3" />;
+/* ---------- pieces ---------- */
+
+function Bar({ value, max, label }: { value: number; max: number; label: string }) {
+  return (
+    <div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-surface-3">
+        <div className="iris-bar-x h-full transition-[width] duration-300" style={{ width: `${max ? Math.round((value / max) * 100) : 0}%` }} />
+      </div>
+      <p className="tabular mt-1.5 text-[12px] text-ink-3">{label}</p>
+    </div>
+  );
 }
 
-function Conf({ c, reason }: { c: number; reason: string }) {
-  const tone = c >= 0.85 ? 'bg-ok' : c >= 0.6 ? 'bg-warn' : 'bg-danger';
-  return <span title={`${Math.round(c * 100)} % · ${reason}`} className={clsx('inline-block h-1.5 w-1.5 shrink-0 rounded-full', c === 0 ? 'bg-line-strong' : tone)} />;
+function BatchProgress({ b, onClose }: { b: BatchState; onClose: () => void }) {
+  if (!b.total && !b.archives && !b.unsupported) return null;
+  const facts = [
+    b.created && `${b.created} nuevos`,
+    b.already && `${b.already} ya estaban`,
+    b.savedToDrive && `${b.savedToDrive} guardados en Drive`,
+    b.archives && `${b.archives} ZIP ignorados`,
+    b.unsupported && `${b.unsupported} de otro tipo ignorados`,
+  ].filter(Boolean);
+  return (
+    <Card className="p-4">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          {b.running ? <Bar value={b.done} max={b.total} label={`Leyendo ${b.done} de ${b.total}…`} /> : <p className="text-[13px] font-semibold">{b.total ? `Listo: ${b.total} documentos leídos` : 'No había documentos que leer'}</p>}
+          {facts.length > 0 && <p className="mt-1 text-[12px] text-ink-3">{facts.join(' · ')}</p>}
+          {b.errors.length > 0 && (
+            <details className="mt-2 text-[12px]">
+              <summary className="cursor-pointer text-danger">{b.errors.length} con error</summary>
+              <ul className="mt-1 space-y-0.5 text-ink-3">
+                {b.errors.slice(0, 30).map((e, k) => (
+                  <li key={k} className="truncate">
+                    {e.name}: {e.message}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+        {!b.running && (
+          <button type="button" aria-label="Cerrar" onClick={onClose} className="text-ink-3 hover:text-ink">
+            <X size={14} />
+          </button>
+        )}
+      </div>
+    </Card>
+  );
 }
 
-function ProposalCard({ item }: { item: InboxItem }) {
-  const p = item.proposal;
-  const { data: clients } = useClients();
-  const { data: subs } = useSubscriptions();
-  const [kind, setKind] = useState<InboxKind>(p.kind.value ?? 'expense');
-  const [date, setDate] = useState(p.date.value ?? todayISO());
-  const [vendor, setVendor] = useState(p.vendor.value ?? '');
-  const [taxId, setTaxId] = useState(p.taxId.value ?? '');
-  const [invoiceNumber, setInvoiceNumber] = useState(p.invoiceNumber.value ?? '');
-  const [total, setTotal] = useState<number | null>(p.total.value);
-  const [vat, setVat] = useState(String(p.vatRate.value ?? 21));
-  const [irpf, setIrpf] = useState(String(p.irpfRate.value ?? 0));
-  const [clientId, setClientId] = useState(p.clientId.value ?? '');
-  const [category, setCategory] = useState(p.category.value ?? 'otros');
-  const [subId, setSubId] = useState(p.subscriptionId.value ?? '');
-  const [busy, setBusy] = useState(false);
-
-  const clientName = clients?.find((c) => c.id === clientId)?.name ?? null;
-  const fileName = suggestFilename({ ...p, kind: { ...p.kind, value: kind }, date: { ...p.date, value: date }, vendor: { ...p.vendor, value: vendor || null }, total: { ...p.total, value: total } }, clientName, extOf(item.filename));
-  const canConfirm = kind === 'other' || (total !== null && date && (kind === 'expense' ? !!vendor.trim() : !!clientId && !!invoiceNumber.trim()));
-
-  const confirm = async () => {
-    setBusy(true);
-    await act(
-      'inbox.confirm',
-      { id: item.id, kind, date, vendor: vendor.trim(), taxId, invoiceNumber: invoiceNumber.trim(), total: total ?? 0, vatRate: Number(vat) || 0, irpfRate: kind === 'income' ? Number(irpf) || 0 : 0, clientId: kind === 'income' ? clientId || null : null, category, subscriptionId: subId || null, concept: fileName },
-      kind === 'expense' ? 'Gasto registrado' : kind === 'income' ? 'Factura de ingreso registrada' : 'Documento archivado',
+export function DriveBar({ notInDrive = 0, waiting = 0, pendingMoves = 0, onSync }: { notInDrive?: number; waiting?: number; pendingMoves?: number; onSync?: () => void }) {
+  const drive = useDrive();
+  if (!drive.enabled || !drive.settings) return null;
+  if (!drive.account)
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-[10px] border border-line bg-surface px-3 py-2.5">
+        <CloudOff size={15} className="shrink-0 text-ink-3" />
+        <p className="min-w-0 flex-1 text-[12.5px] text-ink-2">Conecta tu Google Drive para que cada archivo se guarde allí, ordenado por año, mes y tipo.</p>
+        <Button size="sm" variant="primary" onClick={() => void connectAndRegister()}>
+          Conectar Google Drive
+        </Button>
+      </div>
     );
-    setBusy(false);
-  };
+  const extra = waiting || pendingMoves;
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-[10px] border border-line bg-surface px-3 py-2.5">
+      <HardDrive size={15} className="shrink-0 text-ink-2" />
+      <p className="min-w-0 flex-1 text-[12.5px] text-ink-2">
+        Drive de <strong className="text-ink">{drive.account}</strong> · carpeta «Business OS»
+        {!drive.ready && <span className="text-ink-3"> · hay que reconectar (Google pide permiso cada hora)</span>}
+        {extra > 0 && <span className="text-ink-3"> · {waiting ? `${waiting} por subir` : ''}{waiting && pendingMoves ? ', ' : ''}{pendingMoves ? `${pendingMoves} por ordenar` : ''}</span>}
+        {!extra && notInDrive > 0 && <span className="text-ink-3"> · {notInDrive} sin copia en Drive: vuelve a soltar esos archivos y se completan</span>}
+      </p>
+      {(!drive.ready || extra > 0) && onSync && (
+        <Button size="sm" variant={drive.ready ? 'secondary' : 'primary'} onClick={onSync}>
+          {drive.ready ? 'Guardar en Drive ahora' : 'Reconectar'}
+        </Button>
+      )}
+      <a href={`https://drive.google.com/drive/my-drive?authuser=${encodeURIComponent(drive.account)}`} target="_blank" rel="noreferrer" className="text-[12px] font-semibold text-ink-2 hover:text-ink">
+        Abrir Drive →
+      </a>
+    </div>
+  );
+}
+
+const NEW = '__new';
+
+function GroupCard({ group, kind, clients, byId, today, onConfirm, busy }: { group: Group; kind: 'income' | 'expense'; clients: Client[]; byId: Map<string, Client>; today: string; onConfirm: (l: ConfirmInput[]) => Promise<void>; busy: boolean }) {
+  const [open, setOpen] = useState(group.items.length <= 3);
+  const [assign, setAssign] = useState<string>(group.clientId ?? (group.counterparty ? NEW : ''));
+  const [paid, setPaid] = useState(group.items.every((i) => looksPaid(i.proposal.date.value, today)));
+  const [editing, setEditing] = useState<string | null>(null);
+
+  const ov: Override = kind === 'income' ? (assign === NEW ? { newClientName: group.counterparty, paid } : assign ? { clientId: assign, paid } : { paid }) : {};
+  const drafts = group.items.map((i) => ({ item: i, d: draftFrom(i, byId, today, ov) }));
+  const confirmable = drafts.filter((x) => x.d.input && !x.item.duplicateOf);
+  const sum = group.items.reduce((s, i) => s + (i.proposal.total.value ?? 0) * (i.proposal.rectificativa ? -1 : 1), 0);
 
   return (
-    <Card className="overflow-visible">
-      <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
-        <FileIcon mime={item.mimeType} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[13.5px] font-medium">{item.filename}</p>
-          <p className="truncate text-[11.5px] text-ink-3">Se guardará como {fileName}</p>
-        </div>
-        {item.duplicateOf && <Badge tone="warn">Posible duplicado</Badge>}
-        {item.storagePath ? (
-          <a href={`/api/files?path=${encodeURIComponent(item.storagePath)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[12px] font-semibold text-ink-2 hover:text-ink">
-            Ver archivo <ExternalLink size={12} />
-          </a>
-        ) : (
-          DATA_MODE === 'firestore' && <span className="text-[11.5px] text-ink-3">Archivo no guardado</span>
-        )}
-      </div>
-      <div className="space-y-4 p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <Segmented<InboxKind>
-            value={kind}
-            onChange={setKind}
-            options={[
-              { value: 'expense', label: 'Gasto' },
-              { value: 'income', label: 'Ingreso' },
-              { value: 'other', label: 'Otro documento' },
-            ]}
-          />
-          <span className="flex items-center gap-1.5 text-[11.5px] text-ink-3">
-            <Conf c={p.kind.confidence} reason={p.kind.reason} /> {p.kind.reason}
-          </span>
-        </div>
-        {kind !== 'other' && (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {kind === 'expense' ? (
-              <Field label="Proveedor">
-                <div className="flex items-center gap-2">
-                  <Conf c={p.vendor.confidence} reason={p.vendor.reason} />
-                  <Input value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="¿Quién te cobra?" />
-                </div>
-              </Field>
-            ) : (
-              <Field label="Cliente">
-                <div className="flex items-center gap-2">
-                  <Conf c={p.clientId.confidence} reason={p.clientId.reason} />
-                  <Select value={clientId} onChange={(e) => setClientId(e.target.value)}>
-                    <option value="">Elige cliente…</option>
-                    {(clients ?? []).filter((c) => c.status !== 'archived').map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-              </Field>
-            )}
-            <Field label="Fecha">
-              <div className="flex items-center gap-2">
-                <Conf c={p.date.confidence} reason={p.date.reason} />
-                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-              </div>
-            </Field>
-            <Field label="Total (IVA incl.)">
-              <div className="flex items-center gap-2">
-                <Conf c={p.total.confidence} reason={p.total.reason} />
-                <MoneyInput value={total} onChange={setTotal} className="flex-1" />
-              </div>
-            </Field>
-            <Field label="Nº factura">
-              <div className="flex items-center gap-2">
-                <Conf c={p.invoiceNumber.confidence} reason={p.invoiceNumber.reason} />
-                <Input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder={kind === 'income' ? 'Obligatorio' : 'Opcional'} />
-              </div>
-            </Field>
-            <Field label="IVA %">
-              <Select value={vat} onChange={(e) => setVat(e.target.value)}>
-                {['21', '10', '4', '0'].map((v) => (
-                  <option key={v} value={v}>
-                    {v} %
+    <Card>
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+        <button type="button" onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={open}>
+          <ChevronDown size={15} className={clsx('shrink-0 text-ink-3 transition-transform', !open && '-rotate-90')} />
+          <div className="min-w-0">
+            <p className="font-display truncate text-[20px] leading-tight">{group.label}</p>
+            <p className="truncate text-[11.5px] text-ink-3">
+              {group.items.length} {group.items.length === 1 ? 'archivo' : 'archivos'} · <span className="tabular">{formatEUR(sum)}</span>
+              {group.sub ? ` · ${group.sub}` : ''}
+            </p>
+          </div>
+        </button>
+        {kind === 'income' && (
+          <div className="flex flex-wrap items-center gap-3">
+            <Select value={assign} onChange={(e) => setAssign(e.target.value)} className="w-[220px]" aria-label="Cliente para todo el grupo">
+              <option value="">Cliente de cada factura</option>
+              {group.counterparty && <option value={NEW}>+ Crear cliente «{group.counterparty}»</option>}
+              {clients
+                .filter((c) => c.status !== 'archived')
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
                   </option>
                 ))}
-              </Select>
-            </Field>
-            {kind === 'expense' ? (
-              <>
-                <Field label="Categoría">
-                  <Select value={category} onChange={(e) => setCategory(e.target.value)}>
-                    {EXPENSE_CATEGORIES.map((c) => (
-                      <option key={c} value={c}>
-                        {EXPENSE_CATEGORY_LABEL[c]}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="Suscripción" hint={subId ? 'Se enlaza el cobro con la suscripción' : undefined}>
-                  <Select value={subId} onChange={(e) => setSubId(e.target.value)}>
-                    <option value="">Ninguna</option>
-                    {(subs ?? []).map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="NIF del proveedor">
-                  <Input value={taxId} onChange={(e) => setTaxId(e.target.value)} placeholder="Opcional" />
-                </Field>
-              </>
-            ) : (
-              <Field label="Retención IRPF %">
-                <Input value={irpf} onChange={(e) => setIrpf(e.target.value)} inputMode="decimal" />
-              </Field>
-            )}
+            </Select>
+            <Toggle on={paid} onChange={setPaid} label="Ya cobradas" />
           </div>
         )}
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
-          {total !== null && kind !== 'other' && <span className="mr-auto text-[12.5px] text-ink-3">{kind === 'expense' ? 'Gasto' : 'Ingreso'} de <strong className="tabular text-ink">{formatEUR(total)}</strong></span>}
-          <Button variant="ghost" onClick={() => act('inbox.discard', { id: item.id }, 'Descartado')}>
-            Descartar
-          </Button>
-          <Button variant="primary" loading={busy} disabled={!canConfirm} onClick={confirm}>
-            Confirmar
-          </Button>
-        </div>
+        <Button size="sm" variant="primary" disabled={!confirmable.length || busy} onClick={() => void onConfirm(confirmable.map((x) => x.d.input!))}>
+          Confirmar {confirmable.length}
+          {confirmable.length < group.items.length ? ` de ${group.items.length}` : ''}
+        </Button>
       </div>
+      {open && (
+        <ul className="divide-y divide-line border-t border-line">
+          {drafts.map(({ item, d }) => (
+            <li key={item.id}>
+              {editing === item.id ? (
+                <div className="bg-surface-2 p-3">
+                  <ProposalCard item={item} onDone={() => setEditing(null)} />
+                  <button type="button" className="mt-2 text-[12px] font-semibold text-ink-3 hover:text-ink" onClick={() => setEditing(null)}>
+                    Cerrar
+                  </button>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setEditing(item.id)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] hover:bg-surface-2">
+                  <Conf c={confidenceOf(item)} reason={item.proposal.kind.reason} />
+                  <span className="tabular w-14 shrink-0 text-[12px] text-ink-3">{shortDate(item.proposal.date.value)}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {kind === 'expense' ? item.proposal.vendor.value ?? <em className="text-ink-3">sin proveedor</em> : item.proposal.invoiceNumber.value ?? <em className="text-ink-3">sin número</em>}
+                    <span className="ml-2 text-[11.5px] text-ink-3">{item.filename}</span>
+                  </span>
+                  {item.proposal.rectificativa && <Badge tone="changes">Rectificativa</Badge>}
+                  {item.duplicateOf && <Badge tone="warn">Duplicado</Badge>}
+                  {d.missing.length > 0 && <Badge tone="danger">Falta {d.missing.join(', ')}</Badge>}
+                  <span className="hidden sm:inline">
+                    <FileLink item={item} />
+                  </span>
+                  <span className="tabular w-24 shrink-0 text-right font-semibold">{item.proposal.total.value !== null ? formatEUR(item.proposal.total.value * (item.proposal.rectificativa ? -1 : 1)) : '—'}</span>
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {!open && group.items.some((i) => !draftFrom(i, byId, today, ov).input) && (
+        <p className="border-t border-line px-4 py-2 text-[11.5px] text-ink-3">Algunos archivos necesitan un dato; ábrelo para revisarlos.</p>
+      )}
     </Card>
   );
 }

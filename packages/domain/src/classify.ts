@@ -18,6 +18,44 @@ export interface ClassifyInput {
   filename: string;
   mimeType: string;
   text: string;
+  /** Relative path when the file came inside a folder, e.g. "2026/03 MARZO/Ingresos/f.pdf". */
+  path?: string;
+}
+
+/* ---------- hints from the folder the file came in ---------- */
+
+export interface PathHints {
+  kind: 'income' | 'expense' | null;
+  rectificativa: boolean;
+  year: number | null;
+  month: number | null;
+}
+
+const MONTH_WORDS: Record<string, number> = {
+  enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6, julio: 7, agosto: 8,
+  septiembre: 9, setiembre: 9, octubre: 10, noviembre: 11, diciembre: 12,
+};
+
+/** Reads "2026/03 MARZO/Gastos/…" style paths (only the folders, not the file name). */
+export function pathHints(path: string | undefined): PathHints {
+  const out: PathHints = { kind: null, rectificativa: false, year: null, month: null };
+  if (!path) return out;
+  const folders = path.split(/[\\/]/).slice(0, -1).map((f) => norm(f));
+  for (const f of folders) {
+    if (/rectificativ|abono/.test(f)) out.rectificativa = true;
+    if (/ingreso|emitid|ventas?\b|clientes/.test(f)) out.kind = 'income';
+    else if (/gasto|recibid|compras?\b|proveedor|tickets?\b/.test(f)) out.kind = 'expense';
+    const y = f.match(/\b(20\d{2})\b/);
+    if (y) out.year = Number(y[1]);
+    const word = Object.keys(MONTH_WORDS).find((w) => new RegExp(`\\b${w}\\b`).test(f));
+    if (word) out.month = MONTH_WORDS[word]!;
+    else {
+      const m = f.match(/^(0?[1-9]|1[0-2])(?:\s|[-_.]|$)/);
+      if (m && !y) out.month = Number(m[1]);
+    }
+  }
+  if (out.rectificativa && !out.kind) out.kind = 'income';
+  return out;
 }
 
 type Guess<T> = { value: T | null; confidence: number; reason: string };
@@ -125,7 +163,7 @@ export function findDates(text: string): ISODate[] {
 const AMOUNT = /(-?\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|-?\d+(?:[.,]\d{2}))\s*(?:€|eur\b)?/gi;
 
 function amountsIn(line: string): number[] {
-  return [...line.matchAll(AMOUNT)].map((m) => parseEuro(m[1]!)).filter((x): x is number => x !== null && x > 0);
+  return [...line.matchAll(AMOUNT)].map((m) => parseEuro(m[1]!)).map((x) => (x === null ? null : Math.abs(x))).filter((x): x is number => x !== null && x > 0);
 }
 
 /** Best "total" amount: last amount on lines that say total (not subtotal/base), else the largest € amount. */
@@ -180,6 +218,45 @@ export function findInvoiceNumber(text: string): Guess<string> {
   return m ? guess(m[1]!.replace(/[.,]$/, ''), 0.8, 'Número de factura indicado') : none();
 }
 
+const LEGAL_FORM = /\b(s\.?\s?l\.?\s?u?\.?|s\.?\s?a\.?\s?u?\.?|s\.?\s?c\.?\s?p?\.?|s\.?\s?coop|sociedad|limitada|associacio|asociacion|fundacio|fundacion|c\.?\s?b\.?)$/;
+const NOT_A_NAME = /cif|nif|dni|n\.i\.f|c\.i\.f|calle|c\/|avda|avinguda|avenida|plaza|pla[cç]a|passeig|paseo|tel[eé]?f?|tlf|m[oó]vil|e-?mail|@|www\.|\bcp\b|\d{5}|fecha|date|factura|invoice|n[ºo°]|iban|total|base|iva|concepto|descripci/i;
+
+/** Name of the other party (the client on your invoices, the vendor on received ones). */
+export function findCounterparty(text: string, taxId: string | null): Guess<string> {
+  const lines = text.split(/\r?\n/).map((l) => l.trim());
+  const labelled = text.match(/(?:cliente|facturar a|datos del cliente|bill to|destinatario|receptor)\s*:?\s*\n?\s*([^\n]{3,80})/i);
+  if (labelled) {
+    const v = labelled[1]!.replace(/\s{2,}/g, ' ').trim();
+    if (v && !NOT_A_NAME.test(v)) return guess(v, 0.8, 'Indicado como cliente');
+  }
+  if (taxId) {
+    const at = lines.findIndex((l) => normalizeTaxId(l).includes(taxId));
+    if (at >= 0) {
+      const window = [at, at - 1, at - 2, at - 3, at + 1].filter((i) => i >= 0 && i < lines.length);
+      const sameLine = lines[at]!.replace(/(?:CIF|NIF|DNI|N\.I\.F\.?|C\.I\.F\.?)\s*:?\s*\S+/gi, '').replace(/[\s,;:·-]+$/, '').trim();
+      for (const i of window) {
+        const l = i === at ? sameLine : lines[i]!;
+        if (l.length >= 3 && l.length <= 80 && LEGAL_FORM.test(norm(l))) return guess(l.replace(/\s{2,}/g, ' '), 0.85, 'Razón social junto al NIF');
+      }
+      for (const i of window) {
+        const l = i === at ? sameLine : lines[i]!;
+        if (l.length >= 3 && l.length <= 60 && /[A-Za-zÁÉÍÓÚÑÇ]{3}/.test(l) && !NOT_A_NAME.test(l)) return guess(l.replace(/\s{2,}/g, ' '), 0.6, 'Nombre junto al NIF');
+      }
+    }
+  }
+  return none();
+}
+
+function invoiceNumber(text: string, filename: string): Guess<string> {
+  const found = findInvoiceNumber(text);
+  if (found.value) return found;
+  const stem = filename.replace(/\.[a-z0-9]+$/i, '').trim();
+  // "F2026-011", "Factura 34", "2026_015 City Hall" → use the file name when it carries a number.
+  const m = stem.match(/(?:factura|fra\.?|fact\.?)?\s*([A-Z]{0,4}[-_ ]?\d{1,4}(?:[-_/]\d{1,5})?)/i);
+  if (m && /\d/.test(m[1]!) && !/\d{4}-\d{2}-\d{2}|whatsapp|img[-_ ]\d|scan/i.test(stem)) return guess(m[1]!.trim().replace(/_/g, '-'), 0.45, 'Sacado del nombre del archivo');
+  return found;
+}
+
 /* ---------- main ---------- */
 
 export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): InboxProposal {
@@ -187,8 +264,10 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
   const t = norm(text);
   const fname = norm(input.filename.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' '));
   const hay = `${t}\n${fname}`;
-  const issuerTax = normalizeTaxId(ctx.issuer.taxId || '');
+  const hints = pathHints(input.path);
   const taxIds = findTaxIds(text);
+  // Without your NIF in Ajustes, a file in an "Ingresos" folder tells us the first NIF is yours.
+  const issuerTax = normalizeTaxId(ctx.issuer.taxId || '') || (hints.kind === 'income' && taxIds.length > 1 ? taxIds[0]! : '');
 
   /* client (by tax id, then by name/alias as whole words) */
   let client: Guess<ID> = none();
@@ -219,7 +298,9 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
   const issuerFirst = issuerTax && taxIds[0] === issuerTax;
   const issuerName = norm(ctx.issuer.legalName || ctx.issuer.name || '');
   const issuerNameNearTop = issuerName.length > 3 && norm(text.split(/\r?\n/).slice(0, 8).join(' ')).includes(issuerName);
-  if (issuerFirst || (issuerTax && taxIds.includes(issuerTax) && client.value && issuerNameNearTop)) {
+  if (hints.kind) {
+    kind = guess<InboxKind>(hints.kind, 0.95, hints.rectificativa ? 'Carpeta de rectificativas' : `Carpeta de ${hints.kind === 'income' ? 'ingresos' : 'gastos'}`);
+  } else if (issuerFirst || (issuerTax && taxIds.includes(issuerTax) && client.value && issuerNameNearTop)) {
     kind = guess<InboxKind>('income', issuerFirst ? 0.9 : 0.75, 'Tu NIF aparece como emisor');
   } else if (/\bticket\b|factura simplificada|\brecibo\b|\breceipt\b|whatsapp image/.test(hay)) {
     kind = guess<InboxKind>('expense', 0.85, 'Ticket o recibo de compra');
@@ -251,15 +332,29 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
   /* tax id of the other party */
   const otherTax = taxIds.find((x) => x !== issuerTax) ?? null;
   const taxId: Guess<string> = otherTax ? guess(otherTax, 0.8, 'NIF/CIF en el documento') : none();
+  const counterparty = findCounterparty(text, otherTax);
+  // An income invoice whose client NIF we don't know yet: still say who it is.
+  if (kind.value === 'income' && !client.value && otherTax) {
+    const byTax = ctx.clients.find((c) => c.taxId && normalizeTaxId(c.taxId) === otherTax);
+    if (byTax) client = guess(byTax.id, 0.95, `NIF de ${byTax.name}`);
+  }
+  if (kind.value === 'expense' && vendor.confidence < 0.85 && counterparty.value) vendor = guess(counterparty.value, counterparty.confidence * 0.8, counterparty.reason);
 
   /* date: prefer one on a line saying "fecha"; else first; else from file name */
   let date: Guess<ISODate> = none('Sin fecha');
+  const folderDate = hints.year && hints.month ? `${hints.year}-${pad(hints.month)}-01` : null;
   const fechaLine = text.split(/\r?\n/).find((l) => /fecha|date|emisi[oó]n/i.test(l) && findDates(l).length);
   const dates = findDates(text);
   const fileDates = findDates(input.filename.replace(/[_]/g, '-'));
   if (fechaLine) date = guess(findDates(fechaLine)[0]!, 0.9, 'Línea de fecha');
   else if (dates.length) date = guess(dates[0]!, 0.7, 'Primera fecha del documento');
   else if (fileDates.length) date = guess(fileDates[0]!, 0.6, 'Fecha en el nombre del archivo');
+  else if (folderDate) date = guess(folderDate, 0.4, 'Mes de la carpeta');
+  // A date far from the folder's month is probably a due date or a service date: prefer the folder month.
+  if (folderDate && date.value && date.value.slice(0, 7) !== folderDate.slice(0, 7) && date.confidence < 0.9) {
+    const inMonth = dates.find((d) => d.startsWith(folderDate.slice(0, 7)));
+    if (inMonth) date = guess(inMonth, 0.85, 'Fecha del mes de la carpeta');
+  }
 
   /* amounts */
   const total = findTotal(text);
@@ -278,7 +373,7 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
     date,
     vendor,
     taxId,
-    invoiceNumber: findInvoiceNumber(text),
+    invoiceNumber: invoiceNumber(text, input.filename),
     total,
     base,
     vatRate,
@@ -286,6 +381,8 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
     clientId: client,
     category,
     subscriptionId,
+    counterparty,
+    rectificativa: hints.rectificativa || /\bfactura rectificativa\b|\babono\b/.test(t),
   };
 }
 

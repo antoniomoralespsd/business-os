@@ -21,8 +21,22 @@ export const InboxProposalSchema = z.object({
   clientId: GuessSchema(IdSchema),
   category: GuessSchema(z.string()),
   subscriptionId: GuessSchema(IdSchema),
+  /** Name of the other party as written in the document (client on income, vendor on expenses). */
+  counterparty: GuessSchema(z.string()).default({ value: null, confidence: 0, reason: '' }),
+  /** Corrective invoice: amounts are subtracted. */
+  rectificativa: z.boolean().default(false),
 });
 export type InboxProposal = z.infer<typeof InboxProposalSchema>;
+
+/** Where the file lives in Google Drive. */
+export const DriveRefSchema = z.object({
+  account: z.string().email(),
+  fileId: z.string().min(1).max(200),
+  name: z.string().max(300),
+  folder: z.string().max(400).default(''),
+  webViewLink: z.string().url().max(600),
+});
+export type DriveRef = z.infer<typeof DriveRefSchema>;
 
 export const InboxItemSchema = BaseDocSchema.extend({
   filename: z.string(),
@@ -32,6 +46,11 @@ export const InboxItemSchema = BaseDocSchema.extend({
   /** Where the file lives (Firebase Storage path) or null if it could not be stored yet. */
   storagePath: z.string().nullable(),
   textExcerpt: z.string().default(''),
+  /** Folder path it came in (e.g. "2026/03 MARZO/Ingresos/f.pdf"). */
+  sourcePath: z.string().default(''),
+  drive: DriveRefSchema.nullable().default(null),
+  /** What it was confirmed as (used to file it in the right Drive folder). */
+  filedAs: z.object({ date: ISODateSchema, kind: z.enum(INBOX_KINDS), rectificativa: z.boolean(), name: z.string() }).nullable().default(null),
   status: z.enum(['needs_confirmation', 'completed', 'discarded']),
   proposal: InboxProposalSchema,
   result: z.object({ kind: z.enum(['expense', 'income', 'none']), id: z.string().nullable() }).nullable().default(null),
@@ -44,10 +63,14 @@ export const CreateInboxItemInput = z.object({
   mimeType: z.string().max(120),
   size: z.number().int().min(0),
   sha256: z.string().length(64),
-  storagePath: z.string().nullable(),
+  storagePath: z.string().nullable().default(null),
+  sourcePath: z.string().max(500).default(''),
   textExcerpt: z.string().max(20_000).default(''),
   proposal: InboxProposalSchema,
 });
+
+export const AttachDriveInput = z.object({ id: IdSchema, drive: DriveRefSchema });
+export const UpdateProposalsInput = z.object({ items: z.array(z.object({ id: IdSchema, proposal: InboxProposalSchema })).min(1).max(300) });
 
 export const ConfirmInboxInput = z.object({
   id: IdSchema,
@@ -63,4 +86,17 @@ export const ConfirmInboxInput = z.object({
   category: z.string().default('otros'),
   subscriptionId: IdSchema.nullable().default(null),
   concept: z.string().max(300).default(''),
+  rectificativa: z.boolean().default(false),
+  /** Income already collected (old invoices). */
+  paid: z.boolean().default(false),
+  /** Create the client from the invoice data (reused if a client with that NIF already exists). */
+  newClient: z.object({ name: z.string().trim().min(1).max(120), taxId: z.string().max(32).default('') }).nullable().default(null),
 });
+
+/** Google accounts connected for Drive (no tokens: those stay in the browser). */
+export const GoogleSettingsSchema = z.object({
+  accounts: z.array(z.object({ email: z.string().email(), addedAt: z.string().default('') })).default([]),
+  /** Account whose Drive keeps invoices and receipts. */
+  billingAccount: z.string().email().nullable().default(null),
+});
+export type GoogleSettings = z.infer<typeof GoogleSettingsSchema>;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ExpenseSchema, InvoiceSchema, JobSchema, SubscriptionSchema, TaskSchema } from '@bos/schemas';
+import { ExpenseSchema, InboxItemSchema, InvoiceSchema, JobSchema, SubscriptionSchema, TaskSchema } from '@bos/schemas';
 import { classifyDocument } from '@bos/domain';
 import { parseDoc } from '@/lib/convert';
 import { MemoryDb } from '@/data/memoryDb';
@@ -120,6 +120,46 @@ describe('actions on MemoryDb', () => {
     const inc = await call<{ kind: string; id: string }>('inbox.confirm', { id: b.id, kind: 'income', date: '2026-09-30', total: 12720, vatRate: 21, irpfRate: 15, clientId: 'city-hall', invoiceNumber: '2026-084' });
     const inv = parseDoc(InvoiceSchema, inc.id, await one('invoices', inc.id))!;
     expect(inv).toMatchObject({ external: true, invoiceNumber: '2026-084', subtotal: 12000, total: 12720, status: 'sent' });
+  });
+
+  it('imports a historic invoice folder: creates or learns clients, rectificativas, paid, drive and settings', async () => {
+    const { call, one, all } = setup();
+    await call('client.create', { name: 'City Hall' });
+    const ctx = { issuer: { name: '', legalName: '', taxId: '' }, clients: [], subscriptions: [], today: '2026-10-07' };
+    const mk = async (n: number, text: string, path: string) => {
+      const proposal = classifyDocument({ filename: `f${n}.pdf`, mimeType: 'application/pdf', text, path }, ctx);
+      return (await call<{ id: string }>('inbox.create', { filename: `f${n}.pdf`, mimeType: 'application/pdf', size: 10, sha256: String(n).repeat(64).slice(0, 64), sourcePath: path, textExcerpt: text, proposal })).id;
+    };
+    const a = await mk(1, 'Antonio\nNIF 12345678Z\nFactura nº F-1\nFecha: 10/02/2026\nOcio Sur SL\nCIF B87654321\nTotal 121,00 €', '2026/02 FEBRERO/Ingresos/f1.pdf');
+    const b = await mk(2, 'Antonio\nNIF 12345678Z\nFactura nº F-2\nFecha: 11/03/2026\nOcio Sur SL\nCIF B87654321\nTotal 242,00 €', '2026/03 MARZO/Ingresos/f2.pdf');
+    const r = await mk(3, 'Factura rectificativa R-1\nFecha: 12/03/2026\nCIF B11111111\nTotal -60,50 €', '2026/Rectificativas/f3.pdf');
+    expect(parseDoc(InboxItemSchema, a, await one('inbox', a))!.sourcePath).toBe('2026/02 FEBRERO/Ingresos/f1.pdf');
+
+    // New client created from the invoice, then reused (same NIF) instead of duplicated.
+    const ra = await call<{ clientId: string; learned: boolean }>('inbox.confirm', { id: a, kind: 'income', date: '2026-02-10', total: 12100, vatRate: 21, invoiceNumber: 'F-1', taxId: 'B87654321', newClient: { name: 'Ocio Sur SL', taxId: 'B87654321' }, paid: true });
+    const rb = await call<{ clientId: string }>('inbox.confirm', { id: b, kind: 'income', date: '2026-03-11', total: 24200, vatRate: 21, invoiceNumber: 'F-2', taxId: 'B-87654321', newClient: { name: 'Ocio Sur', taxId: 'B-87654321' } });
+    expect(ra).toMatchObject({ clientId: 'ocio-sur-sl', learned: true });
+    expect(rb.clientId).toBe('ocio-sur-sl');
+    expect((await all('clients')).length).toBe(2);
+    const invs = (await all('invoices')).map((d) => parseDoc(InvoiceSchema, String(d.id), d)!);
+    expect(invs.find((i) => i.invoiceNumber === 'F-1')).toMatchObject({ status: 'paid', total: 12100 });
+    expect(invs.find((i) => i.invoiceNumber === 'F-2')).toMatchObject({ status: 'sent' });
+
+    // Assigning to an existing client teaches it the NIF.
+    const rr = await call<{ id: string; learned: boolean }>('inbox.confirm', { id: r, kind: 'income', date: '2026-03-12', total: 6050, vatRate: 21, invoiceNumber: 'R-1', taxId: 'B11111111', clientId: 'city-hall', rectificativa: true });
+    expect(rr.learned).toBe(true);
+    expect((await one('clients', 'city-hall')).taxId).toBe('B11111111');
+    expect(parseDoc(InvoiceSchema, rr.id, await one('invoices', rr.id))).toMatchObject({ total: -6050, subtotal: -5000 });
+    expect(parseDoc(InboxItemSchema, r, await one('inbox', r))!.filedAs).toMatchObject({ kind: 'income', rectificativa: true, date: '2026-03-12' });
+
+    await call('inbox.attachDrive', { id: r, drive: { account: 'antoniomorales.psd@gmail.com', fileId: 'abc', name: 'x.pdf', folder: 'Business OS/Facturación/2026/Rectificativas', webViewLink: 'https://drive.google.com/file/d/abc/view' } });
+    expect(parseDoc(InboxItemSchema, r, await one('inbox', r))!.drive?.fileId).toBe('abc');
+
+    await call('settings.google', { add: 'antoniomorales.psd@gmail.com' });
+    await call('settings.google', { add: 'a9214@esdi.edu.es' });
+    expect(await one('settings', 'google')).toMatchObject({ billingAccount: 'antoniomorales.psd@gmail.com' });
+    await call('settings.google', { remove: 'antoniomorales.psd@gmail.com' });
+    expect(await one('settings', 'google')).toMatchObject({ billingAccount: 'a9214@esdi.edu.es' });
   });
 
   it('links a job to the task it came from', async () => {

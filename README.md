@@ -29,7 +29,7 @@ Abre http://localhost:3000. Los datos viven en memoria/localStorage del navegado
 8. **Clientes iniciales**: `pnpm seed`.
 9. **Arrancar**: `pnpm dev` → entra con Google.
 10. **Publicar**: Compilación → App Hosting → conectar el repo de GitHub, raíz `apps/web`. Rellena los valores de `apps/web/apphosting.yaml`.
-11. **Storage (para el Inbox)**: Compilación → Storage → Comenzar → modo producción → ubicación europea. Sin esto el Inbox clasifica pero no guarda el archivo.
+11. **Google Drive (para el Inbox)**: habilita la API una vez en https://console.cloud.google.com/apis/library/drive.googleapis.com?project=bussiness-os y conecta la cuenta en Ajustes → Cuentas de Google. Firebase Storage ya no hace falta.
 
 ## Estructura
 

@@ -2,18 +2,26 @@
 import clsx from 'clsx';
 import { useMemo, useState } from 'react';
 import type { Invoice } from '@bos/schemas';
-import { formatEUR } from '@bos/domain';
+import { formatEUR, MONTHS } from '@bos/domain';
 import { Badge, Card, EmptyState, Loading, Segmented } from '@/components/ui/kit';
 import { useInvoices } from '@/data/hooks';
 import { shortDate } from '@/lib/format';
 import { invoiceStatusText, invoiceTone } from './status';
 
 type Filter = 'open' | 'all' | 'draft' | 'paid';
+type GroupBy = 'none' | 'client' | 'month';
+
+const monthName = (ym: string) => {
+  const [y, m] = ym.split('-').map(Number) as [number, number];
+  const n = MONTHS[m - 1] ?? '';
+  return `${n.charAt(0).toUpperCase()}${n.slice(1)} ${y}`;
+};
 
 /** Invoice list. With clientId → only that client's. Click opens the invoice sheet (handled by parent). */
 export function InvoicesPanel({ clientId, onOpen }: { clientId?: string; onOpen: (id: string) => void }) {
   const { data } = useInvoices(clientId ? [{ field: 'clientId', op: '==', value: clientId }] : []);
   const [filter, setFilter] = useState<Filter>('all');
+  const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const list = useMemo(() => {
     const rows = (data ?? []).filter((i) => !i.archived);
     const f = rows.filter((i) =>
@@ -21,6 +29,18 @@ export function InvoicesPanel({ clientId, onOpen }: { clientId?: string; onOpen:
     );
     return f.sort((a, b) => (b.date + (b.invoiceNumber ?? '')).localeCompare(a.date + (a.invoiceNumber ?? '')));
   }, [data, filter]);
+  const grouped = useMemo(() => {
+    if (groupBy === 'none' || clientId) return null;
+    const m = new Map<string, { label: string; rows: Invoice[] }>();
+    for (const i of list) {
+      const key = groupBy === 'client' ? i.clientId : i.date.slice(0, 7);
+      const g = m.get(key) ?? { label: groupBy === 'client' ? i.client.name : monthName(key), rows: [] };
+      g.rows.push(i);
+      m.set(key, g);
+    }
+    const out = [...m.entries()];
+    return groupBy === 'client' ? out.sort((a, b) => a[1].label.localeCompare(b[1].label)) : out.sort((a, b) => b[0].localeCompare(a[0]));
+  }, [list, groupBy, clientId]);
   const pending = (data ?? []).filter((i) => i.status === 'issued' || i.status === 'sent').reduce((s, i) => s + i.total, 0);
 
   if (!data) return <Loading />;
@@ -37,6 +57,18 @@ export function InvoicesPanel({ clientId, onOpen }: { clientId?: string; onOpen:
             { value: 'paid', label: 'Cobradas' },
           ]}
         />
+        {!clientId && (
+          <Segmented<GroupBy>
+            size="sm"
+            value={groupBy}
+            onChange={setGroupBy}
+            options={[
+              { value: 'none', label: 'Lista' },
+              { value: 'client', label: 'Por cliente' },
+              { value: 'month', label: 'Por mes' },
+            ]}
+          />
+        )}
         {pending > 0 && (
           <p className="text-[12.5px] text-ink-3">
             Pendiente de cobro: <span className="tabular font-semibold text-ink">{formatEUR(pending)}</span>
@@ -45,6 +77,23 @@ export function InvoicesPanel({ clientId, onOpen }: { clientId?: string; onOpen:
       </div>
       {list.length === 0 ? (
         <EmptyState title="Sin facturas aquí">Crea una factura desde los trabajos pendientes, o sube una factura antigua al Inbox para que quede registrada.</EmptyState>
+      ) : grouped ? (
+        <div className="space-y-5">
+          {grouped.map(([key, g]) => (
+            <section key={key}>
+              <p className="eyebrow mb-2 flex items-baseline gap-2 text-ink-2">
+                {g.label} <span className="tabular font-normal text-ink-3">· {g.rows.length} · {formatEUR(g.rows.reduce((s, i) => s + i.total, 0))}</span>
+              </p>
+              <Card>
+                <ul className="divide-y divide-line">
+                  {g.rows.map((i) => (
+                    <InvoiceRow key={i.id} inv={i} showClient={groupBy !== 'client'} onOpen={() => onOpen(i.id)} />
+                  ))}
+                </ul>
+              </Card>
+            </section>
+          ))}
+        </div>
       ) : (
         <Card>
           <ul className="divide-y divide-line">
@@ -70,7 +119,7 @@ export function InvoiceRow({ inv, showClient, onOpen }: { inv: Invoice; showClie
         </span>
         <span className="tabular hidden text-[12px] text-ink-3 md:block">{shortDate(inv.date)}</span>
         <span className="hidden md:block">
-          <Badge tone={invoiceTone(inv)}>{invoiceStatusText(inv)}</Badge>
+          {inv.total < 0 ? <Badge tone="changes">Rectificativa</Badge> : <Badge tone={invoiceTone(inv)}>{invoiceStatusText(inv)}</Badge>}
         </span>
         <span className="tabular text-right text-[13.5px] font-semibold">{formatEUR(inv.total)}</span>
       </button>

@@ -32,7 +32,7 @@ firebase deploy --only firestore:rules,firestore:indexes
 - Dinero en céntimos enteros.
 - Todo doc cuelga de `workspaces/{workspaceId}/…`.
 - Archivos de servidor que no deben entrar en la demo estática usan la extensión `.server.ts` (`route.server.ts`, `middleware.server.ts`).
-- Ningún secreto en el cliente ni en el repo. Tokens OAuth → Secret Manager.
+- Ningún secreto en el cliente ni en el repo. Tokens OAuth de servidor → Secret Manager. Excepción: Drive usa tokens de 1 h solo en el navegador con `drive.file` (ADR 0005).
 - Diseño: tokens en `apps/web/src/app/globals.css`. Rogie solo para títulos grandes y cifras; Figtree para todo lo demás. El degradado iris es acento, nunca relleno de tarjetas.
 - **No construir módulos no aprobados.** Los módulos pendientes muestran `ComingSoon`.
 
@@ -43,4 +43,5 @@ firebase deploy --only firestore:rules,firestore:indexes
 - Clientes: hecho (carpeta por cliente con módulos: resumen, tareas, trabajos, facturas, enlaces, caja fuerte cifrada en el navegador, notas, datos y tarifas).
 - Facturación, Suscripciones, Inbox (clasificación gasto/ingreso por reglas), Archivo, Ajustes, modo oscuro: hecho.
 - Migraciones puntuales: acción `system.migrate`, registradas en `migrations/{id}`.
-- Pendiente: activar Firebase Storage (Inbox guarda archivos), Google Drive multi-cuenta.
+- Inbox: sube carpetas enteras (pistas por carpeta: mes, Gastos/Ingresos/Rectificativas), agrupa ingresos por cliente, crea/aprende clientes por NIF, confirma en bloque y guarda en Google Drive (ADR 0005).
+- Pendiente: ordenar el Drive antiguo (requiere OAuth de servidor), Gmail.

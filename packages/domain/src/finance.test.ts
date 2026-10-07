@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Expense, Invoice, Job, Subscription } from '@bos/schemas';
 import { billingAlerts, formatInvoiceNumber, quarterOf, quarterRange, summarizeQuarter, unbilledByClient } from './billing';
-import { classifyDocument, findDates, findTaxIds, findTotal, suggestFilename } from './classify';
+import { classifyDocument, findCounterparty, findDates, findTaxIds, findTotal, pathHints, suggestFilename } from './classify';
 import { computeTotals, formatEUR, parseEuro, splitVat } from './money';
 import { advanceRenewal, monthlyEquivalent, renewalWindow, subscriptionAlerts, subscriptionTotals, yearlyEquivalent } from './subscriptions';
 
@@ -147,4 +147,37 @@ describe('document classifier', () => {
     expect(p.kind.value).toBe('other');
     expect(p.total.value).toBeNull();
   });
+
+  it('reads hints from the folder structure', () => {
+    expect(pathHints('2026/03 MARZO/Ingresos/f.pdf')).toEqual({ kind: 'income', rectificativa: false, year: 2026, month: 3 });
+    expect(pathHints('FACTURAS/2026/01 ENERO/GASTOS/ticket.jpg')).toEqual({ kind: 'expense', rectificativa: false, year: 2026, month: 1 });
+    expect(pathHints('2026/Rectificativas/R-001.pdf')).toEqual({ kind: 'income', rectificativa: true, year: 2026, month: null });
+    expect(pathHints('suelto.pdf')).toEqual({ kind: null, rectificativa: false, year: null, month: null });
+  });
+
+  it('classifies a historic income invoice by folder even without my NIF, and names the unknown client', () => {
+    const text = `Antonio Morales\nNIF 12345678Z\nFactura nº 2026-011\nFecha: 14/02/2026\nOcio Nocturno Sur SL\nCIF B87654321\nCalle Mayor 3, 08001 Barcelona\nBase imponible 200,00 €\nIVA 21% 42,00 €\nTotal 212,00 €`;
+    const noIssuer = { ...ctx, issuer: { name: '', legalName: '', taxId: '' } };
+    const p = classifyDocument({ filename: 'F2026-011.pdf', mimeType: 'application/pdf', text, path: '2026/02 FEBRERO/Ingresos/F2026-011.pdf' }, noIssuer);
+    expect(p.kind.value).toBe('income');
+    expect(p.taxId.value).toBe('B87654321');
+    expect(p.counterparty.value).toBe('Ocio Nocturno Sur SL');
+    expect(p.clientId.value).toBeNull();
+    expect(p.date.value).toBe('2026-02-14');
+    expect(p.total.value).toBe(21200);
+  });
+
+  it('marks corrective invoices and reads negative totals as amounts', () => {
+    const text = `Factura rectificativa R-2026-002\nFecha: 03/04/2026\nCliente: City Hall Barcelona SL\nCIF B12345678\nTotal -60,50 €`;
+    const p = classifyDocument({ filename: 'R-2026-002.pdf', mimeType: 'application/pdf', text, path: '2026/Rectificativas/R-2026-002.pdf' }, ctx);
+    expect(p.rectificativa).toBe(true);
+    expect(p.kind.value).toBe('income');
+    expect(p.clientId.value).toBe('city-hall');
+    expect(p.total.value).toBe(6050);
+  });
+
+  it('finds the counterparty from a label', () => {
+    expect(findCounterparty('Facturar a: Bellaka Events SLU\nNIF B11111111', 'B11111111').value).toBe('Bellaka Events SLU');
+  });
 });
+
