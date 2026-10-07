@@ -1,18 +1,30 @@
 'use client';
 import clsx from 'clsx';
-import { Archive, Paperclip, Plus, Trash2 } from 'lucide-react';
+import { Archive, ExternalLink, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { EXPENSE_CATEGORIES, type Expense, type ExpenseCategory } from '@bos/schemas';
-import { formatEUR, splitVat, todayISO } from '@bos/domain';
+import { formatEUR, MONTHS, splitVat, todayISO } from '@bos/domain';
 import { Badge, Button, Card, EmptyState, Field, Input, Loading, MoneyInput, Segmented, Select, Sheet, Textarea, Toggle } from '@/components/ui/kit';
-import { act, useExpenses } from '@/data/hooks';
+import { act, useExpenses, useInbox } from '@/data/hooks';
 import { shortDate } from '@/lib/format';
 import { EXPENSE_CATEGORY_LABEL } from './status';
 
 type Filter = 'all' | 'pending' | 'month';
 
+const monthName = (ym: string) => {
+  const n = MONTHS[Number(ym.slice(5, 7)) - 1] ?? '';
+  return `${n.charAt(0).toUpperCase()}${n.slice(1)} ${ym.slice(0, 4)}`;
+};
+function byMonth(list: Expense[]): [string, Expense[]][] {
+  const m = new Map<string, Expense[]>();
+  for (const e of list) m.set(e.date.slice(0, 7), [...(m.get(e.date.slice(0, 7)) ?? []), e]);
+  return [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+}
+
 export function ExpensesPanel({ initialFilter }: { initialFilter?: Filter }) {
   const { data } = useExpenses();
+  const { data: inbox } = useInbox();
+  const driveOf = useMemo(() => new Map((inbox ?? []).filter((i) => i.drive).map((i) => [i.id, i.drive!.webViewLink])), [inbox]);
   const [filter, setFilter] = useState<Filter>(initialFilter ?? 'all');
   const [open, setOpen] = useState<string | 'new' | null>(null);
   const month = todayISO().slice(0, 7);
@@ -52,24 +64,46 @@ export function ExpensesPanel({ initialFilter }: { initialFilter?: Filter }) {
       {list.length === 0 ? (
         <EmptyState title="Sin gastos aquí">Sube tickets y facturas al Inbox y se registran solos, o añádelos a mano.</EmptyState>
       ) : (
-        <Card>
-          <ul className="divide-y divide-line">
-            {list.map((e) => (
-              <li key={e.id}>
-                <button type="button" onClick={() => setOpen(e.id)} className="grid w-full grid-cols-[64px_1fr_auto] items-center gap-3 px-4 py-3 text-left hover:bg-surface-2 md:grid-cols-[72px_1fr_140px_110px_110px]">
-                  <span className="tabular text-[12px] text-ink-3">{shortDate(e.date)}</span>
-                  <span className="min-w-0 truncate text-[13px]">
-                    <span className="font-medium">{e.vendor}</span>
-                    {e.concept && <span className="text-ink-2"> · {e.concept}</span>}
-                  </span>
-                  <span className="hidden text-[12px] text-ink-2 md:block">{EXPENSE_CATEGORY_LABEL[e.category]}</span>
-                  <span className="hidden md:block">{e.status === 'pending' ? <Badge tone="warn">Sin factura</Badge> : e.fileId ? <Badge tone="ok"><Paperclip size={9} /> Doc</Badge> : <Badge>OK</Badge>}</span>
-                  <span className={clsx('tabular text-right text-[13.5px] font-semibold', !e.deductible && 'text-ink-3')}>{formatEUR(e.total)}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Card>
+        <div className="space-y-5">
+          {byMonth(list).map(([ym, rows]) => (
+            <section key={ym}>
+              <p className="eyebrow mb-2 flex items-baseline gap-2 text-ink-2">
+                {monthName(ym)}
+                <span className="tabular font-normal text-ink-3">
+                  · {rows.length} · {formatEUR(rows.reduce((s, e) => s + e.total, 0))} · IVA {formatEUR(rows.reduce((s, e) => s + e.vat, 0))}
+                </span>
+              </p>
+              <Card>
+                <ul className="divide-y divide-line">
+                  {rows.map((e) => {
+                    const link = e.fileId ? driveOf.get(e.fileId) : undefined;
+                    return (
+                      <li key={e.id} className="flex items-center hover:bg-surface-2">
+                        <button type="button" onClick={() => setOpen(e.id)} className="grid min-w-0 flex-1 grid-cols-[56px_1fr_auto] items-center gap-3 py-3 pl-4 text-left md:grid-cols-[64px_1fr_130px_70px_110px]">
+                          <span className="tabular text-[12px] text-ink-3">{shortDate(e.date)}</span>
+                          <span className="min-w-0 truncate text-[13px]">
+                            <span className="font-medium">{e.vendor}</span>
+                            {e.invoiceNumber && <span className="text-ink-3"> · {e.invoiceNumber}</span>}
+                          </span>
+                          <span className="hidden text-[12px] text-ink-2 md:block">{EXPENSE_CATEGORY_LABEL[e.category]}</span>
+                          <span className="tabular hidden text-[12px] text-ink-3 md:block">{e.status === 'pending' ? <Badge tone="warn">Sin factura</Badge> : `IVA ${e.vatRate} %`}</span>
+                          <span className={clsx('tabular text-right text-[13.5px] font-semibold', !e.deductible && 'text-ink-3')}>{formatEUR(e.total)}</span>
+                        </button>
+                        <span className="w-10 shrink-0 text-center">
+                          {link && (
+                            <a href={link} target="_blank" rel="noreferrer" className="inline-grid h-7 w-7 place-items-center rounded-[4px] text-ink-3 hover:bg-surface-3 hover:text-ink" aria-label="Ver en Drive" title="Ver en Drive">
+                              <ExternalLink size={13} />
+                            </a>
+                          )}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Card>
+            </section>
+          ))}
+        </div>
       )}
       <ExpenseSheet open={open !== null} expense={editing} onClose={() => setOpen(null)} />
     </div>

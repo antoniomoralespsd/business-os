@@ -1,11 +1,11 @@
 'use client';
-import { Ban, Check, FileText, Plus, Printer, Send, Stamp, Trash2, Undo2 } from 'lucide-react';
+import { Ban, Check, ExternalLink, FileText, Plus, Printer, Send, Stamp, Trash2, Undo2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { Invoice, InvoiceLine } from '@bos/schemas';
 import { computeTotals, formatEUR, todayISO } from '@bos/domain';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Badge, Button, Field, Input, MoneyInput, Sheet, Textarea } from '@/components/ui/kit';
-import { act, useInvoices, useIssuer } from '@/data/hooks';
+import { act, useInbox, useInvoices, useIssuer } from '@/data/hooks';
 import { STATIC_EXPORT } from '@/lib/config';
 import { numericDate, shortDate } from '@/lib/format';
 import { invoiceStatusText, invoiceTone } from './status';
@@ -14,6 +14,8 @@ export function InvoiceSheet({ invoiceId, onClose }: { invoiceId: string | null;
   const { data: invoices } = useInvoices();
   const inv = invoiceId ? (invoices ?? []).find((i) => i.id === invoiceId) ?? null : null;
   const issuer = useIssuer();
+  const { data: inbox } = useInbox();
+  const driveFile = inv?.fileId ? (inbox ?? []).find((i) => i.id === inv.fileId)?.drive ?? null : null;
   const [confirm, setConfirm] = useState<'issue' | 'cancel' | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -74,10 +76,18 @@ export function InvoiceSheet({ invoiceId, onClose }: { invoiceId: string | null;
                 {inv.status === 'draft' ? 'Descartar' : 'Anular'}
               </Button>
             )}
-            {inv.status !== 'draft' && !STATIC_EXPORT && (
-              <Button icon={<Printer size={14} />} onClick={() => window.open(printUrl, '_blank')}>
-                PDF
+            {driveFile ? (
+              <Button icon={<ExternalLink size={14} />} onClick={() => window.open(driveFile.webViewLink, '_blank')}>
+                Ver en Drive
               </Button>
+            ) : (
+              inv.status !== 'draft' &&
+              !inv.external &&
+              !STATIC_EXPORT && (
+                <Button icon={<Printer size={14} />} onClick={() => window.open(printUrl, '_blank')}>
+                  PDF
+                </Button>
+              )
             )}
             {draft && dirty && (
               <Button onClick={save} loading={busy}>
@@ -112,7 +122,8 @@ export function InvoiceSheet({ invoiceId, onClose }: { invoiceId: string | null;
         <div className="space-y-6">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={invoiceTone(inv)}>{invoiceStatusText(inv)}</Badge>
-            {inv.external && <Badge>Subida desde Inbox</Badge>}
+            {inv.external && <Badge>{driveFile ? 'Archivo en Drive' : 'Importada'}</Badge>}
+            {driveFile && <span className="truncate text-[11.5px] text-ink-3">{driveFile.folder}</span>}
             {inv.sentAt && <span className="text-[12px] text-ink-3">Enviada el {shortDate(inv.sentAt.slice(0, 10))}</span>}
             {inv.paidAt && <span className="text-[12px] text-ink-3">· Cobrada el {shortDate(inv.paidAt)}</span>}
           </div>

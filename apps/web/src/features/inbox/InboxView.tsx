@@ -1,6 +1,6 @@
 'use client';
 import clsx from 'clsx';
-import { AlertTriangle, ChevronDown, CloudOff, FolderInput, FolderUp, HardDrive, RefreshCw, Sparkles, Trash2, UploadCloud, Wand2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, CloudOff, FolderInput, FolderUp, HardDrive, RefreshCw, Sparkles, Trash2, Undo2, UploadCloud, Wand2, X } from 'lucide-react';
 import { aiUnavailable, onAiStatus } from '@/lib/aiExtract';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import Link from 'next/link';
@@ -33,6 +33,9 @@ export function InboxView() {
   const [view, setView] = useState<View>('all');
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmUndoAll, setConfirmUndoAll] = useState(false);
+  const confirmed = useMemo(() => (items ?? []).filter((i) => i.status === 'completed'), [items]);
+  const confirmedCount = confirmed.length;
   const filesRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
   const today = todayISO();
@@ -280,9 +283,42 @@ export function InboxView() {
         }}
       />
 
+      <ConfirmDialog
+        open={confirmUndoAll}
+        title={`¿Deshacer los ${confirmedCount} archivos confirmados?`}
+        description="Se borran los gastos y facturas que se crearon al confirmarlos (las facturas emitidas desde la app no se tocan) y los archivos vuelven a «Por confirmar» para revisarlos bien. Los archivos de Drive no se borran."
+        confirmLabel="Deshacer todo"
+        danger
+        onOpenChange={setConfirmUndoAll}
+        onConfirm={() => {
+          setConfirmUndoAll(false);
+          const ids = confirmed.map((i) => i.id);
+          void (async () => {
+            let undone = 0;
+            let removed = 0;
+            for (let k = 0; k < ids.length; k += 500) {
+              const r = await callAction<{ undone: number; removed: number }>('inbox.undoMany', { ids: ids.slice(k, k + 500) }).catch((e: unknown) => {
+                toast.error(e instanceof Error ? e.message : 'Error');
+                return { undone: 0, removed: 0 };
+              });
+              undone += r.undone;
+              removed += r.removed;
+            }
+            toast(`${undone} vuelven a «Por confirmar» · ${removed} gastos/facturas importados quitados de Facturación`);
+          })();
+        }}
+      />
+
       {done.length > 0 && (
         <div className="px-4 pt-10 md:px-8">
-          <p className="eyebrow mb-2 text-ink-3">Procesados recientemente</p>
+          <div className="mb-2 flex flex-wrap items-center gap-3">
+            <p className="eyebrow text-ink-3">Procesados recientemente</p>
+            {confirmedCount > 0 && (
+              <Button size="sm" variant="ghost" icon={<Undo2 size={13} />} className="ml-auto" onClick={() => setConfirmUndoAll(true)}>
+                Deshacer todo lo confirmado ({confirmedCount})
+              </Button>
+            )}
+          </div>
           <Card>
             <ul className="divide-y divide-line">
               {done.map((i) => (

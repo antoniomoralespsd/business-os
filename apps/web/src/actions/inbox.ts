@@ -274,4 +274,39 @@ export const undoInboxItem = defineAction({
   },
 });
 
-export const inboxActions = [createInboxItem, confirmInboxItem, discardInboxItem, attachDrive, updateProposals, removeInboxItems, undoInboxItem];
+export const undoManyInboxItems = defineAction({
+  name: 'inbox.undoMany',
+  description: 'Deshace en bloque lo confirmado desde el Inbox: borra los gastos y facturas importados y devuelve los archivos a pendientes.',
+  input: z.object({ ids: z.array(z.string()).min(1).max(1000) }),
+  critical: true,
+  handler: async (ctx, { ids }) => {
+    let undone = 0;
+    let removed = 0;
+    for (let k = 0; k < ids.length; k += 50) {
+      const chunk = ids.slice(k, k + 50);
+      await ctx.db.runTransaction(async (tx) => {
+        const items = (await Promise.all(chunk.map((id) => tx.get(ctx.col('inbox').doc(id))))).map((snap, i) => (snap.exists ? parseDoc(InboxItemSchema, chunk[i]!, snap.data() ?? {}) : null));
+        const targets = items.map((it) => (it?.result?.id ? (it.result.kind === 'expense' ? ctx.col('expenses').doc(it.result.id) : it.result.kind === 'income' ? ctx.col('invoices').doc(it.result.id) : null) : null));
+        const tsnaps = await Promise.all(targets.map((t) => (t ? tx.get(t) : Promise.resolve(null))));
+        items.forEach((it, i) => {
+          if (!it || it.status === 'needs_confirmation') return;
+          const t = targets[i];
+          const d = tsnaps[i];
+          const data = d?.exists ? d.data() ?? {} : null;
+          if (t && data && data.fileId === it.id && (it.result?.kind === 'expense' || data.external === true)) {
+            tx.delete(t);
+            removed++;
+          }
+          tx.update(ctx.col('inbox').doc(it.id), { status: 'needs_confirmation', result: null, filedAs: null, ...(it.drive ? { drive: { ...it.drive, filed: false } } : {}), updatedAt: ctx.now });
+          undone++;
+        });
+      });
+    }
+    await ctx.db.runTransaction(async (tx) => {
+      ctx.log(tx, { action: 'inbox.undoMany', entity: { kind: 'inbox', id: ids[0]! }, summary: `${undone} confirmaciones deshechas (${removed} gastos/facturas importados borrados)` });
+    });
+    return { undone, removed };
+  },
+});
+
+export const inboxActions = [undoManyInboxItems, createInboxItem, confirmInboxItem, discardInboxItem, attachDrive, updateProposals, removeInboxItems, undoInboxItem];

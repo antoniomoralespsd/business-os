@@ -1,10 +1,11 @@
 'use client';
 import clsx from 'clsx';
+import { ExternalLink } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { Invoice } from '@bos/schemas';
 import { formatEUR, MONTHS } from '@bos/domain';
 import { Badge, Card, EmptyState, Loading, Segmented } from '@/components/ui/kit';
-import { useInvoices } from '@/data/hooks';
+import { useInbox, useInvoices } from '@/data/hooks';
 import { shortDate } from '@/lib/format';
 import { invoiceStatusText, invoiceTone } from './status';
 
@@ -21,7 +22,10 @@ const monthName = (ym: string) => {
 export function InvoicesPanel({ clientId, onOpen }: { clientId?: string; onOpen: (id: string) => void }) {
   const { data } = useInvoices(clientId ? [{ field: 'clientId', op: '==', value: clientId }] : []);
   const [filter, setFilter] = useState<Filter>('all');
-  const [groupBy, setGroupBy] = useState<GroupBy>('none');
+  const [groupBy, setGroupBy] = useState<GroupBy>('month');
+  const { data: inbox } = useInbox();
+  const driveOf = useMemo(() => new Map((inbox ?? []).filter((i) => i.drive).map((i) => [i.id, i.drive!.webViewLink])), [inbox]);
+  const linkOf = (i: Invoice) => (i.fileId ? driveOf.get(i.fileId) : undefined);
   const list = useMemo(() => {
     const rows = (data ?? []).filter((i) => !i.archived);
     const f = rows.filter((i) =>
@@ -87,7 +91,7 @@ export function InvoicesPanel({ clientId, onOpen }: { clientId?: string; onOpen:
               <Card>
                 <ul className="divide-y divide-line">
                   {g.rows.map((i) => (
-                    <InvoiceRow key={i.id} inv={i} showClient={groupBy !== 'client'} onOpen={() => onOpen(i.id)} />
+                    <InvoiceRow key={i.id} inv={i} showClient={groupBy !== 'client'} onOpen={() => onOpen(i.id)} link={linkOf(i)} />
                   ))}
                 </ul>
               </Card>
@@ -98,7 +102,7 @@ export function InvoicesPanel({ clientId, onOpen }: { clientId?: string; onOpen:
         <Card>
           <ul className="divide-y divide-line">
             {list.map((i) => (
-              <InvoiceRow key={i.id} inv={i} showClient={!clientId} onOpen={() => onOpen(i.id)} />
+              <InvoiceRow key={i.id} inv={i} showClient={!clientId} onOpen={() => onOpen(i.id)} link={linkOf(i)} />
             ))}
           </ul>
         </Card>
@@ -107,10 +111,10 @@ export function InvoicesPanel({ clientId, onOpen }: { clientId?: string; onOpen:
   );
 }
 
-export function InvoiceRow({ inv, showClient, onOpen }: { inv: Invoice; showClient: boolean; onOpen: () => void }) {
+export function InvoiceRow({ inv, showClient, onOpen, link }: { inv: Invoice; showClient: boolean; onOpen: () => void; link?: string }) {
   return (
-    <li>
-      <button type="button" onClick={onOpen} className={clsx('grid w-full grid-cols-[88px_1fr_auto] items-center gap-3 px-4 py-3 text-left hover:bg-surface-2 md:grid-cols-[110px_1fr_90px_110px_120px]', inv.status === 'cancelled' && 'opacity-50')}>
+    <li className="flex items-center hover:bg-surface-2">
+      <button type="button" onClick={onOpen} className={clsx('grid min-w-0 flex-1 grid-cols-[88px_1fr_auto] items-center gap-3 py-3 pl-4 text-left md:grid-cols-[110px_1fr_90px_110px_120px]', inv.status === 'cancelled' && 'opacity-50')}>
         <span className="tabular text-[13px] font-semibold">{inv.invoiceNumber ?? 'Borrador'}</span>
         <span className="min-w-0 truncate text-[13px]">
           {showClient && <span className="font-medium">{inv.client.name}</span>}
@@ -123,6 +127,13 @@ export function InvoiceRow({ inv, showClient, onOpen }: { inv: Invoice; showClie
         </span>
         <span className="tabular text-right text-[13.5px] font-semibold">{formatEUR(inv.total)}</span>
       </button>
+      <span className="w-10 shrink-0 text-center">
+        {link && (
+          <a href={link} target="_blank" rel="noreferrer" className="inline-grid h-7 w-7 place-items-center rounded-[4px] text-ink-3 hover:bg-surface-3 hover:text-ink" aria-label="Ver en Drive" title="Ver en Drive">
+            <ExternalLink size={13} />
+          </a>
+        )}
+      </span>
     </li>
   );
 }

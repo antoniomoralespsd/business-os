@@ -183,6 +183,10 @@ describe('actions on MemoryDb', () => {
     await call('inbox.undo', { id: a });
     expect((await all('invoices')).length).toBe(0);
     expect((await one('inbox', a)).status).toBe('needs_confirmation');
+    // Bulk undo.
+    await call('inbox.confirm', { id: a, kind: 'income', date: '2026-07-01', total: 58300, vatRate: 21, invoiceNumber: '0528', clientId: 'otto' });
+    expect(await call('inbox.undoMany', { ids: [a, b] })).toEqual({ undone: 1, removed: 1 });
+    expect((await all('invoices')).length).toBe(0);
     // Remove pending ones; completed ones are protected.
     await call('inbox.confirm', { id: c, kind: 'other', date: '2026-07-01', total: 0, vatRate: 0 });
     expect((await call<{ removed: number }>('inbox.remove', { ids: [a, b, c] })).removed).toBe(2);
