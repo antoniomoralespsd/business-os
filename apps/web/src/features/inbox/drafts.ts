@@ -1,6 +1,19 @@
 import type { Client, InboxItem, ISODate } from '@bos/schemas';
-import { addDays, MONTHS, suggestFilename } from '@bos/domain';
+import { addDays, MONTHS, proposeFileName } from '@bos/domain';
 import { extOf } from '@/lib/fileTools';
+
+/** What file names are built from: labels learned from you and your name for invoices. */
+export type NameCtx = { learned: Record<string, string>; owner: string };
+let nameCtx: NameCtx = { learned: {}, owner: 'Antonio Morales' };
+/** Set once from the Inbox (settings change rarely); keeps draftFrom's signature simple. */
+export const setNameCtx = (c: NameCtx) => {
+  nameCtx = c;
+};
+
+/** The name a file will get in Drive (may contain "{n}", filled when filing). */
+export function fileNameFor(item: InboxItem, f: { kind: 'expense' | 'income' | 'other'; date: ISODate; vendor?: string; invoiceNumber?: string; clientName?: string | null; rectificativa?: boolean }): string {
+  return proposeFileName({ ...f, ext: extOf(item.filename), text: item.textExcerpt, learned: nameCtx.learned, owner: nameCtx.owner, originalName: item.filename });
+}
 
 /** What the user can override for a whole group before confirming it. */
 export type Override = { clientId?: string | null; newClientName?: string | null; paid?: boolean };
@@ -53,17 +66,16 @@ export function draftFrom(item: InboxItem, clients: Map<string, Client>, today: 
     paid: false,
     newClient: null,
   } satisfies ConfirmInput;
-  if (kind === 'other') return { input: { ...base, total: 0, vatRate: 0 }, missing: [] };
+  if (kind === 'other') return { input: { ...base, total: 0, vatRate: 0, concept: fileNameFor(item, { kind: 'other', date: date ?? today }) }, missing: [] };
 
   const missing: string[] = [];
   if (!date) missing.push('fecha');
   if (total === null) missing.push('importe');
-  const ext = extOf(item.filename);
 
   if (kind === 'expense') {
     const vendor = p.vendor.value ?? '';
     if (!vendor) missing.push('proveedor');
-    const concept = suggestFilename({ ...p, kind: { ...p.kind, value: 'expense' } }, null, ext);
+    const concept = fileNameFor(item, { kind: 'expense', date: date ?? today, vendor, rectificativa: p.rectificativa });
     return {
       input: missing.length ? null : { ...base, vendor, category: p.category.value ?? 'otros', subscriptionId: p.subscriptionId.value, concept },
       missing,
@@ -76,7 +88,7 @@ export function draftFrom(item: InboxItem, clients: Map<string, Client>, today: 
   if (!clientId && !newClient) missing.push('cliente');
   if (!base.invoiceNumber) missing.push('nº de factura');
   const clientName = clientId ? clients.get(clientId)?.name ?? null : newClient?.name ?? null;
-  const concept = suggestFilename(p, clientName, ext);
+  const concept = fileNameFor(item, { kind: 'income', date: date ?? today, invoiceNumber: base.invoiceNumber, clientName, rectificativa: p.rectificativa });
   return {
     input: missing.length
       ? null

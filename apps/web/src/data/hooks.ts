@@ -7,6 +7,7 @@ import {
   ClientSchema,
   ExpenseSchema,
   GoogleSettingsSchema,
+  NamingSettingsSchema,
   InboxItemSchema,
   InvoiceSchema,
   IssuerSettingsSchema,
@@ -67,6 +68,11 @@ export function useIssuer(): IssuerSettings | null {
 export function useGoogleSettings(): GoogleSettings | null {
   const raw = useDocData('settings', 'google');
   return useMemo(() => (raw === undefined ? null : GoogleSettingsSchema.parse(raw ?? {})), [raw]);
+}
+
+export function useNaming(): Record<string, string> {
+  const raw = useDocData('settings', 'naming');
+  return useMemo(() => NamingSettingsSchema.parse(raw ?? {}).labels, [raw]);
 }
 
 export function useVaultMeta() {

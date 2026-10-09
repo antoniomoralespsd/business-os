@@ -9,12 +9,12 @@ import { toast } from 'sonner';
 import type { Client, InboxItem } from '@bos/schemas';
 import { classifyDocument, formatEUR, todayISO } from '@bos/domain';
 import { Badge, Button, Card, EmptyState, Loading, PageHeader, Segmented, Select, Toggle } from '@/components/ui/kit';
-import { act, useClientMap, useClients, useInbox, useIssuer, useSubscriptions } from '@/data/hooks';
+import { act, useClientMap, useClients, useInbox, useIssuer, useNaming, useSubscriptions } from '@/data/hooks';
 import { callAction } from '@/lib/actionsClient';
 import { driveUrl, FOLDER_MIME, hasToken, listChildren } from '@/lib/drive';
 import { filesFromDrop, filesFromInput, type PickedFile } from '@/lib/folderFiles';
 import { shortDate } from '@/lib/format';
-import { confidenceOf, draftFrom, groupPending, looksPaid, type ConfirmInput, type Group, type Override } from './drafts';
+import { confidenceOf, draftFrom, setNameCtx, groupPending, looksPaid, type ConfirmInput, type Group, type Override } from './drafts';
 import { classifyCtx, connectAndRegister, ensureDrive, useDrive, useInboxPipeline, type BatchState } from './pipeline';
 import { Conf, FileIcon, FileLink, ProposalCard } from './ProposalCard';
 
@@ -26,6 +26,8 @@ export function InboxView() {
   const { data: clients } = useClients();
   const { data: subs } = useSubscriptions();
   const issuer = useIssuer();
+  const learned = useNaming();
+  setNameCtx({ learned, owner: issuer?.legalName?.split(' ').slice(0, 2).join(' ') || 'Antonio Morales' });
   const byId = useClientMap(clients);
   const drive = useDrive();
   const pipe = useInboxPipeline({ items, clients, subs, issuer });

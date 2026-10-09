@@ -3,7 +3,8 @@ import clsx from 'clsx';
 import { ExternalLink, FileText, ImageIcon } from 'lucide-react';
 import { useState } from 'react';
 import { EXPENSE_CATEGORIES, type InboxItem, type InboxKind } from '@bos/schemas';
-import { formatEUR, suggestFilename, todayISO } from '@bos/domain';
+import { formatEUR, todayISO } from '@bos/domain';
+import { fileNameFor } from './drafts';
 import { Badge, Button, Card, Field, Input, MoneyInput, Segmented, Select, Toggle } from '@/components/ui/kit';
 import { act, useClients, useSubscriptions } from '@/data/hooks';
 import { EXPENSE_CATEGORY_LABEL } from '@/features/billing/status';
@@ -61,7 +62,9 @@ export function ProposalCard({ item, onDone, onRemove }: { item: InboxItem; onDo
 
   const isNew = clientId === NEW;
   const clientName = isNew ? newName.trim() || null : clients?.find((c) => c.id === clientId)?.name ?? null;
-  const fileName = suggestFilename({ ...p, kind: { ...p.kind, value: kind }, date: { ...p.date, value: date }, vendor: { ...p.vendor, value: vendor || null }, total: { ...p.total, value: total } }, clientName, extOf(item.filename));
+  const suggested = fileNameFor(item, { kind, date, vendor, invoiceNumber, clientName, rectificativa: rect });
+  const [customName, setCustomName] = useState<string | null>(null);
+  const fileName = customName ?? suggested;
   const canConfirm = kind === 'other' || (total !== null && date && (kind === 'expense' ? !!vendor.trim() : !!clientName && !!invoiceNumber.trim()));
 
   const confirm = async () => {
@@ -99,7 +102,7 @@ export function ProposalCard({ item, onDone, onRemove }: { item: InboxItem; onDo
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13.5px] font-medium">{item.filename}</p>
           <p className="truncate text-[11.5px] text-ink-3">
-            {item.sourcePath && item.sourcePath !== item.filename ? `${item.sourcePath.split('/').slice(0, -1).join(' / ')} · ` : ''}Se guardará como {fileName}
+            {item.sourcePath && item.sourcePath !== item.filename ? `${item.sourcePath.split('/').slice(0, -1).join(' / ')} · ` : ''}Nombre original: {item.filename}
           </p>
         </div>
         {item.duplicateOf && <Badge tone="warn">Posible duplicado</Badge>}
@@ -211,6 +214,9 @@ export function ProposalCard({ item, onDone, onRemove }: { item: InboxItem; onDo
             )}
           </div>
         )}
+        <Field label="Nombre en Drive" hint={fileName.includes('{n}') ? '{n} se cambia por el siguiente número libre de la carpeta' : 'Puedes cambiarlo: la próxima vez lo nombrará igual'}>
+          <Input value={fileName} onChange={(e) => setCustomName(e.target.value)} />
+        </Field>
         {kind !== 'other' && (
           <div className="flex flex-wrap gap-x-6 gap-y-2">
             <Toggle on={rect} onChange={setRect} label="Rectificativa (resta)" />

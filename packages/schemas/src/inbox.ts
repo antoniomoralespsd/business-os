@@ -137,3 +137,7 @@ export const AiExtractionSchema = z.object({
   currency: z.string().nullable().catch('EUR'),
 });
 export type AiExtraction = z.infer<typeof AiExtractionSchema>;
+
+/** Names learned from you: vendor key → label used in file names ("cosa rara" → "imprenta"). */
+export const NamingSettingsSchema = z.object({ labels: z.record(z.string(), z.string()).default({}) });
+export type NamingSettings = z.infer<typeof NamingSettingsSchema>;

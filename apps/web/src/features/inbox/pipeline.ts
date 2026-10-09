@@ -2,11 +2,11 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import type { Client, DriveLayout, DriveRef, InboxItem, IssuerSettings, Subscription } from '@bos/schemas';
-import { classifyDocument, mergeAiExtraction, pathHints, todayISO } from '@bos/domain';
+import { classifyDocument, fillSequence, mergeAiExtraction, pathHints, todayISO } from '@bos/domain';
 import { useGoogleSettings } from '@/data/hooks';
 import { callAction } from '@/lib/actionsClient';
 import { DATA_MODE } from '@/lib/config';
-import { billingFolderId, connectDrive, download, DriveAuthNeeded, hasToken, inboxFolderId, moveTo, onDriveTokens, uploadTo, walk, warmUpDrive } from '@/lib/drive';
+import { billingFolderId, connectDrive, download, DriveAuthNeeded, hasToken, inboxFolderId, listChildren, moveTo, onDriveTokens, uploadTo, walk, warmUpDrive } from '@/lib/drive';
 import { aiExtract } from '@/lib/aiExtract';
 import { documentText, extOf, sha256 } from '@/lib/fileTools';
 import { verdictFor, type PickedFile } from '@/lib/folderFiles';
@@ -83,12 +83,23 @@ export function classifyCtx(c: Ctx) {
 }
 
 /** Where a confirmed file goes and with which name. Income and files already in your Drive keep their name. */
-async function targetFor(account: string, layout: DriveLayout | null, it: InboxItem) {
+/**
+ * Where a confirmed file goes and with which name ("o2 octubre.pdf", "gasto oct 26 3.jpg").
+ * `names` caches what's already in each folder so parallel moves never pick the same number.
+ */
+async function targetFor(account: string, layout: DriveLayout | null, it: InboxItem, names: Map<string, Promise<string[]>>) {
   if (it.status === 'discarded') return { folder: await inboxFolderId(account, layout, true), name: undefined };
   const f = it.filedAs!;
   const folder = await billingFolderId(account, layout, f.date, f.kind, f.rectificativa);
-  const keep = it.drive?.keepName || f.kind === 'income';
-  return { folder, name: keep ? undefined : f.name };
+  if (!names.has(folder.id)) names.set(folder.id, listChildren(account, folder.id).then((k) => k.filter((x) => x.id !== it.drive?.fileId).map((x) => x.name)));
+  const list = await names.get(folder.id)!;
+  const current = it.drive?.name ?? '';
+  const wanted = f.name || current;
+  // Already right where it should be with that name → leave it.
+  if (wanted === current && !wanted.includes('{n}')) return { folder, name: undefined };
+  const name = fillSequence(wanted, list.filter((n) => n !== current));
+  list.push(name);
+  return { folder, name };
 }
 
 /** Rules first (instant, offline), then AI on top when it's available. */
@@ -132,7 +143,7 @@ export function useInboxPipeline(ctx: Ctx) {
       try {
         let ref: DriveRef;
         if (item?.status === 'completed' && item.filedAs) {
-          const t = await targetFor(acc, lay, item);
+          const t = await targetFor(acc, lay, item, new Map());
           ref = { ...(await uploadTo(acc, file, t.name ?? file.name, t.folder)), filed: true };
         } else ref = await uploadTo(acc, file, file.name, await inboxFolderId(acc, lay));
         await callAction('inbox.attachDrive', { id, drive: ref });
@@ -291,11 +302,12 @@ export function useInboxPipeline(ctx: Ctx) {
       let uploaded = 0;
       try {
         for (const [id, file] of [...waiting.current]) if (await saveOne(id, file, items.find((i) => i.id === id))) uploaded++;
+        const folderNames = new Map<string, Promise<string[]>>();
         const todo = items.filter((it) => it.drive && !it.drive.filed && it.drive.account === acc && !syncing.current.has(it.id) && ((it.status === 'completed' && it.filedAs) || it.status === 'discarded'));
         await pool(todo, 3, async (it) => {
           syncing.current.add(it.id);
           try {
-            const t = await targetFor(acc, lay, it);
+            const t = await targetFor(acc, lay, it, folderNames);
             const ref = await moveTo(it.drive!, t.folder, t.name);
             await callAction('inbox.attachDrive', { id: it.id, drive: { ...ref, filed: true } });
             moved++;
