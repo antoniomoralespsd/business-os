@@ -7,7 +7,7 @@ import { useGoogleSettings } from '@/data/hooks';
 import { callAction } from '@/lib/actionsClient';
 import { DATA_MODE } from '@/lib/config';
 import { billingFolderId, connectDrive, download, DriveAuthNeeded, hasToken, inboxFolderId, listChildren, moveTo, onDriveTokens, uploadTo, walk, warmUpDrive } from '@/lib/drive';
-import { aiExtract } from '@/lib/aiExtract';
+import { aiExtract, aiLastError } from '@/lib/aiExtract';
 import { documentText, extOf, sha256 } from '@/lib/fileTools';
 import { verdictFor, type PickedFile } from '@/lib/folderFiles';
 
@@ -56,11 +56,14 @@ export type BatchState = {
   unsupported: number;
   savedToDrive: number;
   reread: number;
+  aiOk: number;
+  aiFail: number;
+  aiError: string | null;
   linked: number;
   errors: { name: string; message: string }[];
   running: boolean;
 };
-const EMPTY: BatchState = { label: '', total: 0, done: 0, created: 0, already: 0, archives: 0, unsupported: 0, savedToDrive: 0, reread: 0, linked: 0, errors: [], running: false };
+const EMPTY: BatchState = { label: '', total: 0, done: 0, created: 0, already: 0, archives: 0, unsupported: 0, savedToDrive: 0, reread: 0, aiOk: 0, aiFail: 0, aiError: null, linked: 0, errors: [], running: false };
 
 type Ctx = { items: InboxItem[] | null; clients: Client[] | null; subs: Subscription[] | null; issuer: IssuerSettings | null };
 
@@ -112,7 +115,7 @@ export async function readDocument(file: File, path: string, c: Ctx) {
     owner: { name: c.issuer?.legalName || c.issuer?.name || '', taxId: c.issuer?.taxId ?? '' },
     clients: (c.clients ?? []).filter((x) => x.status !== 'archived').map((x) => x.name),
   });
-  const proposal = ai ? mergeAiExtraction(rules, ai, { ownTaxId: cctx.issuer.taxId, clients: cctx.clients, folderKind: pathHints(path).kind }) : rules;
+  const proposal = ai ? mergeAiExtraction(rules, ai, { ownTaxId: cctx.issuer.taxId, clients: cctx.clients, folderKind: pathHints(path).kind, today: cctx.today }) : rules;
   return { text, proposal, ai: !!ai };
 }
 
@@ -163,7 +166,8 @@ export function useInboxPipeline(ctx: Ctx) {
   /** Reads a file, proposes a classification and creates the Inbox item. */
   const ingest = useCallback(async (file: File, path: string, hash: string): Promise<string> => {
     const isPdf = file.type === 'application/pdf' || extOf(file.name) === 'pdf';
-    const { text, proposal } = await readDocument(file, path, ctxRef.current);
+    const { text, proposal, ai } = await readDocument(file, path, ctxRef.current);
+    bump((b) => (ai ? { aiOk: b.aiOk + 1 } : { aiFail: b.aiFail + 1, aiError: aiLastError() }));
     const r = await callAction<{ id: string }>('inbox.create', {
       filename: file.name.slice(0, 250),
       mimeType: file.type || (isPdf ? 'application/pdf' : 'application/octet-stream'),
@@ -181,7 +185,8 @@ export function useInboxPipeline(ctx: Ctx) {
   const reread = useCallback(async (existing: InboxItem, file: File, path: string, force = false) => {
     if (existing.status !== 'needs_confirmation') return false;
     if (!force && existing.textExcerpt.replace(/\s/g, '').length >= 30 && existing.proposal.total.value !== null) return false;
-    const { text, proposal } = await readDocument(new File([file], existing.filename, { type: existing.mimeType || file.type }), existing.sourcePath || path, ctxRef.current);
+    const { text, proposal, ai } = await readDocument(new File([file], existing.filename, { type: existing.mimeType || file.type }), existing.sourcePath || path, ctxRef.current);
+    bump((b) => (ai ? { aiOk: b.aiOk + 1 } : { aiFail: b.aiFail + 1, aiError: aiLastError() }));
     await callAction('inbox.updateProposals', { items: [{ id: existing.id, proposal, textExcerpt: text.slice(0, 4000) }] });
     return true;
   }, []);

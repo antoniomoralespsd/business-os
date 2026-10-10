@@ -375,6 +375,8 @@ function BatchProgress({ b, onClose }: { b: BatchState; onClose: () => void }) {
     b.already && `${b.already} ya estaban`,
     b.reread && `${b.reread} releídos con OCR`,
     b.linked && `${b.linked} enlazados con lo que ya habías subido`,
+    b.aiOk && `${b.aiOk} leídos con IA`,
+    b.aiFail && `${b.aiFail} con lectura básica${b.aiError ? ` (IA: ${b.aiError})` : ''}`,
     b.savedToDrive && `${b.savedToDrive} guardados en Drive`,
     b.archives && `${b.archives} ZIP ignorados`,
     b.unsupported && `${b.unsupported} de otro tipo ignorados`,
@@ -507,6 +509,7 @@ function DriveImport({ onImport, busy }: { onImport: (f: { id: string; name: str
 }
 
 const NEW = '__new';
+const readByAi = (i: InboxItem) => [i.proposal.total, i.proposal.date, i.proposal.vendor, i.proposal.counterparty].some((g) => g.reason === 'Leído con IA');
 
 function GroupCard({ group, kind, clients, byId, today, onConfirm, onRemove, busy }: { group: Group; kind: 'income' | 'expense'; clients: Client[]; byId: Map<string, Client>; today: string; onConfirm: (l: ConfirmInput[]) => Promise<void>; onRemove: (l: InboxItem[]) => Promise<number>; busy: boolean }) {
   const [open, setOpen] = useState(group.items.length <= 3);
@@ -576,6 +579,7 @@ function GroupCard({ group, kind, clients, byId, today, onConfirm, onRemove, bus
                     <span className="ml-2 text-[11.5px] text-ink-3">{item.filename}</span>
                   </span>
                   {item.proposal.rectificativa && <Badge tone="changes">Rectificativa</Badge>}
+                  {!readByAi(item) && <Badge tone="warn">Sin IA</Badge>}
                   {item.duplicateOf && <Badge tone="warn">Duplicado</Badge>}
                   {d.missing.length > 0 && <Badge tone="danger">Falta {d.missing.join(', ')}</Badge>}
                   <span className="hidden sm:inline">

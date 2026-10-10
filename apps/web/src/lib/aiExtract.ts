@@ -3,16 +3,30 @@ import type { AiExtraction } from '@bos/schemas';
 import { DATA_MODE } from './config';
 import { extOf } from './fileTools';
 
-/** Why the AI isn't available (shown once in the Inbox), or null when it works / hasn't been tried. */
+/**
+ * Why the AI isn't available right now, or null. Never permanent: after a minute it's tried again
+ * (e.g. once the permission in Google Cloud is in place), so an old error can't silently disable it.
+ */
 let unavailable: string | null = null;
+let unavailableUntil = 0;
+/** Last reason a single reading failed (shown in the batch summary). */
+let lastError: string | null = null;
+export const aiLastError = () => lastError;
 const listeners = new Set<() => void>();
-export const aiUnavailable = () => unavailable;
+export const aiUnavailable = () => (unavailable && Date.now() < unavailableUntil ? unavailable : null);
 export function onAiStatus(l: () => void): () => void {
   listeners.add(l);
   return () => listeners.delete(l);
 }
 function setUnavailable(why: string) {
   unavailable = why;
+  unavailableUntil = Date.now() + 60_000;
+  listeners.forEach((l) => l());
+}
+export function resetAiStatus() {
+  unavailable = null;
+  unavailableUntil = 0;
+  lastError = null;
   listeners.forEach((l) => l());
 }
 
@@ -40,7 +54,7 @@ async function shrinkImage(file: Blob): Promise<Blob> {
  * the rule-based reading is used then.
  */
 export async function aiExtract(file: File, ctx: { path: string; owner: { name: string; taxId: string }; clients: string[] }): Promise<AiExtraction | null> {
-  if (DATA_MODE !== 'firestore' || unavailable) return null;
+  if (DATA_MODE !== 'firestore' || aiUnavailable()) return null;
   try {
     const isPdf = file.type === 'application/pdf' || extOf(file.name) === 'pdf';
     const isImg = /^image\/(jpeg|png|webp|heic|heif)/.test(file.type) || /\.(jpe?g|png|webp|heic)$/i.test(file.name);
@@ -55,10 +69,17 @@ export async function aiExtract(file: File, ctx: { path: string; owner: { name: 
     const json = (await res.json().catch(() => null)) as { ok: boolean; data?: AiExtraction; error?: string; code?: string } | null;
     if (res.status === 501) {
       setUnavailable(json?.error ?? 'La lectura con IA no está activada');
+      lastError = json?.error ?? 'IA no activada';
       return null;
     }
-    return json?.ok && json.data ? json.data : null;
-  } catch {
+    if (!json?.ok || !json.data) {
+      lastError = json?.error ?? `Error ${res.status}`;
+      return null;
+    }
+    if (unavailable) resetAiStatus();
+    return json.data;
+  } catch (e) {
+    lastError = e instanceof Error ? e.message : 'Sin conexión';
     return null;
   }
 }

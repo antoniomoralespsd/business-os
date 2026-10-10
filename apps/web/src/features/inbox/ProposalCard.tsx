@@ -45,7 +45,8 @@ export function ProposalCard({ item, onDone, onRemove }: { item: InboxItem; onDo
   const { data: clients } = useClients();
   const { data: subs } = useSubscriptions();
   const [kind, setKind] = useState<InboxKind>(p.kind.value ?? 'expense');
-  const [date, setDate] = useState(p.date.value ?? todayISO());
+  // Never default to today: an unknown date must be typed (it decides the month folder).
+  const [date, setDate] = useState<string>(p.date.value ?? '');
   const [vendor, setVendor] = useState(p.vendor.value ?? '');
   const [taxId, setTaxId] = useState(p.taxId.value ?? '');
   const [invoiceNumber, setInvoiceNumber] = useState(p.invoiceNumber.value ?? '');
@@ -62,10 +63,10 @@ export function ProposalCard({ item, onDone, onRemove }: { item: InboxItem; onDo
 
   const isNew = clientId === NEW;
   const clientName = isNew ? newName.trim() || null : clients?.find((c) => c.id === clientId)?.name ?? null;
-  const suggested = fileNameFor(item, { kind, date, vendor, invoiceNumber, clientName, rectificativa: rect });
+  const suggested = fileNameFor(item, { kind, date: date || todayISO(), vendor, invoiceNumber, clientName, rectificativa: rect });
   const [customName, setCustomName] = useState<string | null>(null);
   const fileName = customName ?? suggested;
-  const canConfirm = kind === 'other' || (total !== null && date && (kind === 'expense' ? !!vendor.trim() : !!clientName && !!invoiceNumber.trim()));
+  const canConfirm = !!date && (kind === 'other' || (total !== null && (kind === 'expense' ? !!vendor.trim() : !!clientName && !!invoiceNumber.trim())));
 
   const confirm = async () => {
     setBusy(true);
@@ -86,6 +87,7 @@ export function ProposalCard({ item, onDone, onRemove }: { item: InboxItem; onDo
         category,
         subscriptionId: subId || null,
         concept: fileName,
+        nameEdited: customName !== null && customName !== suggested,
         rectificativa: kind !== 'other' && rect,
         paid: kind === 'income' && paid,
       },

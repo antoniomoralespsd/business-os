@@ -32,6 +32,7 @@ export type ConfirmInput = {
   category: string;
   subscriptionId: string | null;
   concept: string;
+  nameEdited?: boolean;
   rectificativa: boolean;
   paid: boolean;
   newClient: { name: string; taxId: string } | null;
@@ -66,7 +67,7 @@ export function draftFrom(item: InboxItem, clients: Map<string, Client>, today: 
     paid: false,
     newClient: null,
   } satisfies ConfirmInput;
-  if (kind === 'other') return { input: { ...base, total: 0, vatRate: 0, concept: fileNameFor(item, { kind: 'other', date: date ?? today }) }, missing: [] };
+  if (kind === 'other') return date ? { input: { ...base, total: 0, vatRate: 0, concept: fileNameFor(item, { kind: 'other', date }) }, missing: [] } : { input: null, missing: ['fecha'] };
 
   const missing: string[] = [];
   if (!date) missing.push('fecha');

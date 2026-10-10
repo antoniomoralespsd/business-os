@@ -15,7 +15,7 @@ const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/\p{Diacrit
 /** Vendor → the word used in the file name. First match wins. */
 export const EXPENSE_LABELS: { label: string; match: RegExp }[] = [
   { label: 'regularizacion cuota autonomos', match: /regularizacion.*(autonomo|cotizacion)|(autonomo|cotizacion).*regularizacion/ },
-  { label: 'autonomos', match: /seguridad social|tesoreria general|\btgss\b|\breta\b|cuota (de )?autonomo|trabajadores autonomos/ },
+  { label: 'autonomos', match: /seguridad social|seguretat social|tesoreria general|\btgss\b|\breta\b|r ?e ?autonomos|regimen especial (de )?trabajadores|cuota (de )?autonomo|trabajadores autonomos|cotizacion autonomo/ },
   { label: 'hacienda', match: /agencia tributaria|\baeat\b|modelo (303|130|111|100)/ },
   { label: 'o2', match: /\bo2\b/ },
   { label: 'movistar', match: /movistar/ },
@@ -36,10 +36,10 @@ export const EXPENSE_LABELS: { label: string; match: RegExp }[] = [
   { label: 'apple', match: /\bapple\b|icloud/ },
   { label: 'spotify', match: /spotify/ },
   { label: 'amazon', match: /\bamazon\b|\bamzn\b/ },
-  { label: 'bbva estar seguro', match: /estar ?seguro/ },
+  { label: 'bbva estar seguro', match: /estar ?segur/ },
   { label: 'bbva', match: /\bbbva\b/ },
   { label: 'agua', match: /\baigues\b|\bagua(s)?\b|agbar|sorea|canal de isabel|aqualia|aguas de/ },
-  { label: 'gas', match: /\bgas natural\b|nedgia|\bbutano\b|naturgy.*\bgas\b|\bgas\b.*naturgy/ },
+  { label: 'gas', match: /\bgas natural\b|nedgia|\bbutano\b|ind ay gas|naturgy.*\bgas\b|\bgas\b.*naturgy/ },
   { label: 'luz', match: /endesa|iberdrola|holaluz|som energia|naturgy|energia xxi|curenergia|octopus|electricidad|\bluz\b|lucera|factor energia/ },
   { label: 'gasolina', match: /gasolina|gasoleo|diesel|carburante|estacion de servicio|repsol|cepsa|moeve|\bbp\b|shell|galp|petronor|plenoil|ballenoil/ },
 ];
@@ -50,9 +50,12 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 
 /** Base label for an expense, or null for generic tickets/purchases. */
 export function expenseLabel(vendor: string, text = '', learned: Record<string, string> = {}): string | null {
+  const hay = norm(`${vendor} ${text.slice(0, 1500)}`);
+  // Taxes are never renamed after the bank that charged them (a TGSS receipt says "BBVA").
+  const strong = EXPENSE_LABELS.slice(0, 3).find((l) => l.match.test(hay));
+  if (strong) return strong.label;
   const key = vendorKey(vendor);
   if (key && learned[key]) return learned[key]!;
-  const hay = norm(`${vendor} ${text.slice(0, 1500)}`);
   return EXPENSE_LABELS.find((l) => l.match.test(hay))?.label ?? null;
 }
 

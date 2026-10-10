@@ -58,12 +58,14 @@ export const confirmInboxItem = defineAction({
         if (!input.vendor) throw new ActionError('Indica el proveedor del gasto.');
         const subRef = input.subscriptionId ? ctx.col('subscriptions').doc(input.subscriptionId) : null;
         const subSnap = subRef ? await tx.get(subRef) : null;
-        // Remember how you name this vendor's files ("o2 octubre.pdf" → o2).
-        const namingRef = ctx.col('settings').doc('naming');
-        const naming = NamingSettingsSchema.parse((await tx.get(namingRef)).data() ?? {});
-        const key = vendorKey(input.vendor);
-        const label = input.concept ? labelFromName(input.concept) : null;
-        if (key && label && naming.labels[key] !== label) tx.set(namingRef, { labels: { ...naming.labels, [key]: label }, updatedAt: ctx.now });
+        // Remember how you name this vendor's files ("o2 octubre.pdf" → o2) — only when you typed the name yourself.
+        if (input.nameEdited) {
+          const namingRef = ctx.col('settings').doc('naming');
+          const naming = NamingSettingsSchema.parse((await tx.get(namingRef)).data() ?? {});
+          const key = vendorKey(input.vendor);
+          const label = input.concept ? labelFromName(input.concept) : null;
+          if (key && label && naming.userLabels[key] !== label) tx.set(namingRef, { userLabels: { ...naming.userLabels, [key]: label }, updatedAt: ctx.now });
+        }
         const expRef = ctx.col('expenses').doc();
         const split = splitVat(Math.abs(input.total), input.vatRate);
         const base = split.base * sign;

@@ -72,7 +72,7 @@ export function useGoogleSettings(): GoogleSettings | null {
 
 export function useNaming(): Record<string, string> {
   const raw = useDocData('settings', 'naming');
-  return useMemo(() => NamingSettingsSchema.parse(raw ?? {}).labels, [raw]);
+  return useMemo(() => NamingSettingsSchema.parse(raw ?? {}).userLabels, [raw]);
 }
 
 export function useVaultMeta() {

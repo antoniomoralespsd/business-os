@@ -59,7 +59,10 @@ function prompt(b: z.infer<typeof Body>) {
     '- total = the final amount to pay (TOTAL / Importe total / A pagar). For invoices with IRPF withholding, total = base + VAT − IRPF.',
     '- vatRate: the VAT % applied (21, 10, 4 or 0). Fuel, restaurants, shops normally include VAT even on tickets ("IVA incluido"): read the rate from the VAT breakdown. If several rates, return the one with the largest base.',
     '- Seguridad Social / cuota de autónomo / RETA, taxes (AEAT), insurance premiums and bank fees have no VAT: vatRate 0 and documentType social_security / tax_payment / bank.',
-    '- date = issue date (fecha de factura/emisión), not due date or service dates.',
+    '- date = issue date (fecha de factura/emisión, or the payment date on a receipt/ticket), never the due date (vencimiento), charge date of next bill, billing period or today. Read Spanish/Catalan/English month names ("13-SEP-2026", "September 13th, 2026", "13 de setembre de 2026"). Two-digit years are 20xx. If no date is printed, return null.',
+    `- Today is ${new Date().toISOString().slice(0, 10)}: a document date cannot be later than today.`,
+    '- issuerName = the company that charges (O2/Telefónica, Iberdrola, Tesorería General de la Seguridad Social…). A bank that only collected the payment (BBVA, CaixaBank…) is NOT the issuer of a Seguridad Social receipt.',
+    '- If the freelancer appears as "titular", "cliente" or the person billed, it is an expense (he is the customer), even if his NIF appears first.',
     '- isRectificativa = true for corrective invoices (factura rectificativa / abono) or negative totals.',
     '- Use null for anything not printed. Never invent.',
   ]
@@ -77,7 +80,7 @@ export async function POST(req: Request) {
     const token = (await applicationDefault().getAccessToken()).access_token;
     const body = JSON.stringify({
       contents: [{ role: 'user', parts: [{ inlineData: { mimeType: b.mimeType, data: b.data } }, { text: prompt(b) }] }],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: schema, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } },
+      generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: schema, maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } },
     });
     const call = (loc: string) =>
       fetch(`https://${loc === 'global' ? '' : `${loc}-`}aiplatform.googleapis.com/v1/projects/${PROJECT}/locations/${loc}/publishers/google/models/${MODEL}:generateContent`, {
@@ -88,19 +91,33 @@ export async function POST(req: Request) {
     let res = await call(REGION);
     // Model not offered in the EU region yet → the global endpoint.
     if (res.status === 404) res = await call('global');
+    // Busy (429) or a hiccup (5xx): wait and retry twice.
+    for (let attempt = 1; attempt <= 2 && (res.status === 429 || res.status >= 500); attempt++) {
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+      res = await call(REGION);
+    }
+    if (!res.ok) console.error('[extract] vertex', res.status, (await res.clone().text().catch(() => '')).slice(0, 500));
     if (res.status === 403 || res.status === 404) {
       const detail = await res.text().catch(() => '');
       const code = /SERVICE_DISABLED|has not been used|is disabled/i.test(detail) ? 'api_disabled' : 'forbidden';
       return NextResponse.json({ ok: false, code, error: code === 'api_disabled' ? 'La API de Vertex AI no está activada en el proyecto' : 'La app no tiene permiso para usar Vertex AI' }, { status: 501 });
     }
-    if (!res.ok) return NextResponse.json({ ok: false, error: `La IA no pudo leer el documento (${res.status})` }, { status: 502 });
+    if (!res.ok) return NextResponse.json({ ok: false, error: res.status === 429 ? 'La IA está saturada, prueba en un minuto' : `La IA no pudo leer el documento (${res.status})` }, { status: 502 });
     const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
     const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
-    const data = AiExtractionSchema.safeParse(JSON.parse(text || '{}'));
+    let raw: unknown = {};
+    try {
+      raw = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '') || '{}');
+    } catch {
+      console.error('[extract] bad json', text.slice(0, 300));
+      return NextResponse.json({ ok: false, error: 'La IA devolvió una respuesta incompleta' }, { status: 502 });
+    }
+    const data = AiExtractionSchema.safeParse(raw);
     if (!data.success) return NextResponse.json({ ok: false, error: 'Respuesta de la IA no válida' }, { status: 502 });
     return NextResponse.json({ ok: true, data: data.data });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ ok: false, error: err.message }, { status: err.status });
+    console.error('[extract]', err);
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : 'Error' }, { status: 500 });
   }
 }

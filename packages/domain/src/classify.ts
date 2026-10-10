@@ -71,6 +71,16 @@ const norm = (s: string) =>
 /* ---------- known vendors → category ---------- */
 
 export const KNOWN_VENDORS: { name: string; match: RegExp; category: string }[] = [
+  // First: taxes win over the bank that charged them.
+  { name: 'Seguridad Social', match: /seguridad social|seguretat social|tesoreria general|\btgss\b|r\.? ?e\.? ?autonomos|cuota (?:de )?autonomo|regimen especial de trabajadores autonomos|\breta\b/, category: 'otros' },
+  { name: 'Agencia Tributaria', match: /agencia tributaria|\baeat\b/, category: 'otros' },
+  { name: 'BBVA Estar Seguro', match: /estar ?segur/, category: 'otros' },
+  { name: 'O2', match: /\bo2\b.*(?:fibra|movil|telefonica|factura)|(?:telefonica|fibra).*\bo2\b|o2online/, category: 'telefono' },
+  { name: 'Carbonmade', match: /\bcarbonmade\b/, category: 'software' },
+  { name: 'Simpliers', match: /\bsimpliers\b/, category: 'software' },
+  { name: 'Iberdrola', match: /\biberdrola\b/, category: 'otros' },
+  { name: 'Endesa', match: /\bendesa\b/, category: 'otros' },
+  { name: 'Naturgy', match: /\bnaturgy\b/, category: 'otros' },
   { name: 'Adobe', match: /\badobe\b/, category: 'software' },
   { name: 'Apple', match: /\bapple\b|itunes|icloud/, category: 'software' },
   { name: 'Google', match: /\bgoogle\b|workspace/, category: 'software' },
@@ -108,8 +118,6 @@ export const KNOWN_VENDORS: { name: string; match: RegExp; category: string }[] 
   { name: 'Repsol', match: /\brepsol\b/, category: 'transporte' },
   { name: 'Cepsa', match: /\bcepsa\b|moeve/, category: 'transporte' },
   { name: 'Correos', match: /\bcorreos\b/, category: 'otros' },
-  { name: 'Seguridad Social', match: /seguridad social|tesoreria general|cuota (?:de )?autonomo|\breta\b/, category: 'otros' },
-  { name: 'Agencia Tributaria', match: /agencia tributaria|\baeat\b/, category: 'otros' },
   { name: 'BP', match: /\bbp\b.*(?:estacion|carburante|gasoleo|gasolina)|(?:estacion|carburante).*\bbp\b/, category: 'transporte' },
   { name: 'Shell', match: /\bshell\b/, category: 'transporte' },
   { name: 'Galp', match: /\bgalp\b/, category: 'transporte' },
@@ -142,10 +150,17 @@ const MONTHS_ES: Record<string, number> = {
   jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
 };
 
+const MONTHS_EN: Record<string, number> = {
+  january: 1, february: 2, march: 3, april: 4, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+  sept: 9, gen: 1, febr: 2, abr: 4, ago: 8, set: 9, des: 12,
+  // Catalan
+  gener: 1, febrer: 2, marc: 3, maig: 5, juny: 6, juliol: 7, agost: 8, setembre: 9, novembre: 11, desembre: 12,
+};
 const pad = (n: number) => String(n).padStart(2, '0');
 function validDate(y: number, m: number, d: number): ISODate | null {
   if (y < 100) y += 2000;
-  if (y < 2000 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  // Nothing is invoiced in the future: "77" in a ticket is not 2077.
+  if (y < 2000 || y > new Date().getUTCFullYear() + 1 || m < 1 || m > 12 || d < 1 || d > 31) return null;
   const dt = new Date(Date.UTC(y, m - 1, d));
   if (dt.getUTCMonth() !== m - 1) return null;
   return `${y}-${pad(m)}-${pad(d)}`;
@@ -155,13 +170,20 @@ function validDate(y: number, m: number, d: number): ISODate | null {
 export function findDates(text: string): ISODate[] {
   const out: ISODate[] = [];
   const t = norm(text);
-  for (const m of t.matchAll(/\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b|\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b|\b(\d{1,2})\s+(?:de\s+)?([a-z]{3,10})\.?\s+(?:de\s+)?(\d{4})\b/g)) {
+  const monthOf = (w: string) => MONTHS_ES[w] ?? MONTHS_EN[w] ?? (w.length <= 4 || /^(sept|octu|novi|dici|ener|febr|marz|abri|juni|juli|agos)/.test(w) ? MONTHS_ES[w.slice(0, 3)] : undefined);
+  // 2026-09-13 · 13/09/2026 · 13 de septiembre de 2026 · 13-SEP-2026 · September 13th, 2026 · Sep 13 2026
+  const re =
+    /\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b|\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b|\b(\d{1,2})(?:st|nd|rd|th)?[\s-]+(?:de\s+)?([a-z]{3,10})\.?,?[\s-]+(?:de\s+)?(\d{4})\b|\b([a-z]{3,10})\.?,?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/g;
+  for (const m of t.matchAll(re)) {
     let d: ISODate | null = null;
     if (m[1]) d = validDate(+m[1], +m[2]!, +m[3]!);
     else if (m[4]) d = validDate(+m[6]!, +m[5]!, +m[4]);
     else if (m[7]) {
-      const month = MONTHS_ES[m[8]!] ?? MONTHS_ES[m[8]!.slice(0, 3)];
+      const month = monthOf(m[8]!);
       if (month) d = validDate(+m[9]!, month, +m[7]);
+    } else if (m[10]) {
+      const month = monthOf(m[10]);
+      if (month) d = validDate(+m[12]!, month, +m[11]!);
     }
     if (d) out.push(d);
   }
@@ -215,7 +237,9 @@ export function findBase(text: string): number | null {
 
 const VALID_VAT = [0, 4, 5, 10, 21];
 /** Things that never carry VAT: social security (cuota de autónomo), taxes, insurance premiums, bank fees. */
-export const VAT_EXEMPT = /seguridad social|tesoreria general|\breta\b|cuota (?:de )?autonomo|regimen especial de trabajadores autonomos|agencia tributaria|\baeat\b|modelo (?:303|130|111)|prima de seguro|comision(?:es)? bancaria|exento de iva|exenta de iva|operacion exenta|inversion del sujeto pasivo|reverse charge/;
+export const VAT_NEVER = /seguridad social|seguretat social|tesoreria general|\btgss\b|\breta\b|r\.? ?e\.? ?autonomos|cuota (?:de )?autonomo|regimen especial de trabajadores autonomos|agencia tributaria|\baeat\b|modelo (?:303|130|111)/;
+/** Wording that suggests no VAT — only trusted when no explicit rate is printed. */
+export const VAT_EXEMPT = /prima de seguro|comision(?:es)? bancaria|exento de iva|exenta de iva|operacion exenta|inversion del sujeto pasivo|reverse charge/;
 
 /**
  * VAT rate: the rate printed next to "IVA" (also "21,00 %" and ticket tables where the rate sits
@@ -223,7 +247,7 @@ export const VAT_EXEMPT = /seguridad social|tesoreria general|\breta\b|cuota (?:
  */
 export function findVatRate(text: string, total?: number | null, base?: number | null): Guess<number> {
   const t = norm(text);
-  if (VAT_EXEMPT.test(t)) return guess(0, 0.9, 'Documento sin IVA (cuota, impuesto, seguro o exento)');
+  if (VAT_NEVER.test(t)) return guess(0, 0.95, 'Cuota de autónomo o impuesto: no lleva IVA');
   const lines = t.split(/\r?\n/);
   const votes = new Map<number, number>();
   lines.forEach((l, i) => {
@@ -240,6 +264,7 @@ export function findVatRate(text: string, total?: number | null, base?: number |
   });
   const best = [...votes.entries()].sort((a, b) => b[1] - a[1])[0];
   if (best && best[0] > 0) return guess(best[0], 0.9, `Pone IVA ${best[0]} %`);
+  if (VAT_EXEMPT.test(t)) return guess(0, 0.85, 'Documento sin IVA (seguro, exento o inversión del sujeto pasivo)');
   if (total && base && base > 0 && total > base) {
     const ratio = total / base - 1;
     const r = VALID_VAT.find((v) => v > 0 && Math.abs(ratio - v / 100) < 0.006);
@@ -377,8 +402,17 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
   const issuerFirst = issuerTax && taxIds[0] === issuerTax;
   const issuerName = norm(ctx.issuer.legalName || ctx.issuer.name || '');
   const issuerNameNearTop = issuerName.length > 3 && norm(text.split(/\r?\n/).slice(0, 8).join(' ')).includes(issuerName);
+  // Suppliers you pay (O2, TGSS, Iberdrola…) and bills where you are the "titular" are never your income.
+  // Your own invoices always say "A la atención de" (the client): those can mention Adobe or Amazon in the concept.
+  const yourTemplate = /a la atencion de/.test(t);
+  const knownVendor = yourTemplate ? undefined : KNOWN_VENDORS.find((v) => v.match.test(hay));
+  const youAreCustomer = !yourTemplate && /\btitular\b|datos del titular|bill(ed)? to|facturar a|datos del cliente/.test(t);
   if (hints.kind) {
     kind = guess<InboxKind>(hints.kind, 0.95, hints.rectificativa ? 'Carpeta de rectificativas' : `Carpeta de ${hints.kind === 'income' ? 'ingresos' : 'gastos'}`);
+  } else if (knownVendor) {
+    kind = guess<InboxKind>('expense', 0.9, `Factura de ${knownVendor.name}`);
+  } else if (youAreCustomer && issuerTax && taxIds.includes(issuerTax)) {
+    kind = guess<InboxKind>('expense', 0.85, 'Tú eres el titular: es un gasto');
   } else if (issuerFirst || (issuerTax && taxIds.includes(issuerTax) && client.value && issuerNameNearTop)) {
     kind = guess<InboxKind>('income', issuerFirst ? 0.9 : 0.75, 'Tu NIF aparece como emisor');
   } else if (/\bticket\b|factura simplificada|\brecibo\b|\breceipt\b|whatsapp image/.test(hay)) {
@@ -422,7 +456,11 @@ export function classifyDocument(input: ClassifyInput, ctx: ClassifyContext): In
   /* date: prefer one on a line saying "fecha"; else first; else from file name */
   let date: Guess<ISODate> = none('Sin fecha');
   const folderDate = hints.year && hints.month ? `${hints.year}-${pad(hints.month)}-01` : null;
-  const fechaLine = text.split(/\r?\n/).find((l) => /fecha|date|emisi[oó]n/i.test(l) && findDates(l).length);
+  const textLines = text.split(/\r?\n/);
+  const NOT_ISSUE = /venc|l[ií]mite|\bdue\b|cargo|periodo|per[ií]odo|desde|hasta|consumo|lectura|pr[oó]xim|alta|nacimiento|caducidad|valid/i;
+  const fechaLine =
+    textLines.find((l) => /fecha (de )?(emisi[oó]n|expedici[oó]n|factura)|data (d'emissi[oó]|factura)|invoice date|date of issue|issue date|date issued/i.test(l) && findDates(l).length) ??
+    textLines.find((l) => /\b(fecha|date|data)\b|emisi[oó]n/i.test(l) && !NOT_ISSUE.test(l) && findDates(l).length);
   const dates = findDates(text);
   const fileDates = findDates(input.filename.replace(/[_]/g, '-'));
   const nameMonth = monthInName(input.filename, hints);

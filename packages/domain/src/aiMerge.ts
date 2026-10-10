@@ -12,7 +12,7 @@ const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/\p{Diacrit
 export function mergeAiExtraction(
   rules: InboxProposal,
   ai: AiExtraction,
-  ctx: { ownTaxId: string; clients: readonly Pick<Client, 'id' | 'name' | 'legalName' | 'taxId' | 'aliases' | 'status'>[]; folderKind: 'income' | 'expense' | null },
+  ctx: { ownTaxId: string; clients: readonly Pick<Client, 'id' | 'name' | 'legalName' | 'taxId' | 'aliases' | 'status'>[]; folderKind: 'income' | 'expense' | null; today?: string },
 ): InboxProposal {
   const AI = 'Leído con IA';
   const own = normalizeTaxId(ctx.ownTaxId || '');
@@ -21,7 +21,7 @@ export function mergeAiExtraction(
 
   let kind = rules.kind;
   if (!ctx.folderKind) {
-    if (own && issuerTax === own) kind = g('income' as const, 0.95, 'Tú eres el emisor');
+    if (own && issuerTax === own && customerTax !== own) kind = g('income' as const, 0.95, 'Tú eres el emisor');
     else if (['social_security', 'tax_payment', 'receipt', 'simplified_invoice'].includes(ai.documentType)) kind = g('expense' as const, 0.9, 'Recibo o ticket de compra');
     else if (ai.documentType === 'invoice' && own && customerTax === own) kind = g('expense' as const, 0.95, 'Factura a tu nombre');
     else if (ai.documentType === 'other' && rules.kind.confidence < 0.6) kind = g('other' as const, 0.6, 'No parece una factura');
@@ -40,6 +40,9 @@ export function mergeAiExtraction(
     if (hit) clientId = g<ID>(hit.id, byTax ? 0.95 : 0.8, byTax ? `NIF de ${hit.name}` : `Aparece «${hit.name}»`);
   }
 
+  // A date in the future (or before 2000) is a misreading: keep what the rules found.
+  const maxDate = ctx.today ? `${Number(ctx.today.slice(0, 4))}-${ctx.today.slice(5)}` : null;
+  const aiDate = ai.date && ai.date >= '2000-01-01' && (!maxDate || ai.date <= maxDate) ? ai.date : null;
   const total = cents(ai.total);
   const base = cents(ai.base);
   let vatRate: number | null = ai.vatRate !== null && [0, 4, 5, 10, 21].includes(Math.round(ai.vatRate)) ? Math.round(ai.vatRate) : null;
@@ -52,7 +55,7 @@ export function mergeAiExtraction(
   return {
     ...rules,
     kind,
-    date: ai.date ? g(ai.date, 0.92, AI) : rules.date,
+    date: aiDate ? g(aiDate, 0.92, AI) : rules.date,
     vendor: !isIncome && ai.issuerName ? g(ai.issuerName, 0.9, AI) : rules.vendor,
     taxId: otherTax ? g(otherTax, 0.9, AI) : rules.taxId,
     invoiceNumber: ai.invoiceNumber && !(rules.invoiceNumber.confidence >= 0.95) ? g(ai.invoiceNumber, 0.9, AI) : rules.invoiceNumber,

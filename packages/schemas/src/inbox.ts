@@ -91,6 +91,8 @@ export const ConfirmInboxInput = z.object({
   category: z.string().default('otros'),
   subscriptionId: IdSchema.nullable().default(null),
   concept: z.string().max(300).default(''),
+  /** The user typed the name by hand: remember the label for this vendor. Never learned otherwise. */
+  nameEdited: z.boolean().default(false),
   rectificativa: z.boolean().default(false),
   /** Income already collected (old invoices). */
   paid: z.boolean().default(false),
@@ -139,5 +141,6 @@ export const AiExtractionSchema = z.object({
 export type AiExtraction = z.infer<typeof AiExtractionSchema>;
 
 /** Names learned from you: vendor key → label used in file names ("cosa rara" → "imprenta"). */
-export const NamingSettingsSchema = z.object({ labels: z.record(z.string(), z.string()).default({}) });
+/** Labels you typed yourself (vendor key → word). The old auto-learned `labels` field is ignored on purpose. */
+export const NamingSettingsSchema = z.object({ userLabels: z.record(z.string(), z.string()).default({}) });
 export type NamingSettings = z.infer<typeof NamingSettingsSchema>;
